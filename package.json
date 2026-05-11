@@ -3,5 +3,9 @@
   "private": true,
   "devDependencies": {
     "@cocos/creator-types": "3.8.7"
-  }
+  },
+  "creator": {
+    "version": "3.8.8"
+  },
+  "uuid": "1eaf6098-25c7-4911-81d3-6ffee7679dac"
 }

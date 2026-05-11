@@ -1,5 +1,6 @@
-import { _decorator, Button, Color, Component, Label, Node, Sprite, UITransform, Widget, view } from 'cc';
+import { _decorator, Button, Color, Component, Label, Node, Sprite, UITransform, Widget } from 'cc';
 import { LinkUpBoard } from './LinkUpBoard';
+import { getStableVisibleSize } from '../util/ViewSize';
 import { getWhiteSpriteFrame } from '../util/WhiteSpriteFrame';
 
 const { ccclass } = _decorator;
@@ -30,7 +31,7 @@ export class GameView extends Component {
 
     private _buildUi() {
         const root = this.node;
-        const vs = view.getVisibleSize();
+        const vs = getStableVisibleSize();
         const rw = root.addComponent(UITransform);
         rw.setContentSize(vs.width, vs.height);
         const w = root.addComponent(Widget);

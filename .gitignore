@@ -1,1 +1,19 @@
+# 依赖
 node_modules/
+
+# Cocos Creator 生成目录（勿提交；另一台电脑打开工程会自动生成）
+library/
+local/
+temp/
+
+# 构建输出
+build/
+
+# 编辑器 profiles（默认忽略；两台机场景一致不依赖它，主要靠 assets + .meta + settings）
+# 若团队要强锁「同一批编辑器扩展 / 包列表」，可删掉本行并改为只跟踪 profiles/v2/packages/ 等子路径（需自行约定）
+profiles/
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db
