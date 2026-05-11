@@ -1,0 +1,7 @@
+{
+  "name": "link-up-cocos",
+  "private": true,
+  "devDependencies": {
+    "@cocos/creator-types": "3.8.7"
+  }
+}
