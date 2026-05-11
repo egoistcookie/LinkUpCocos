@@ -1,25 +1,67 @@
-import { _decorator, Button, Color, Component, Label, Node, UITransform } from 'cc';
+import { _decorator, Button, Color, Component, Graphics, Label, Node, Sprite, SpriteFrame, UITransform } from 'cc';
 import { LinkUpPathFinder } from './LinkUpPathFinder';
 
 const { ccclass } = _decorator;
 
+/** 固定 14 行 × 8 列 = 112 格；14 种 × 8 张/种（每种 4 对） */
 export const BOARD_ROWS = 14;
 export const BOARD_COLS = 8;
-const TYPE_COUNT = 14;
+export const TYPE_COUNT = 14;
+/** App 上可配置的棋盘格子贴图槽位数：第 n 项对应「n 号类型」（与格子数字一致） */
+export const TILE_SPRITE_SLOTS = 30;
 const TILES_PER_TYPE = (BOARD_ROWS * BOARD_COLS) / TYPE_COUNT;
 
 const COLOR_SEL = new Color(0xe9, 0xc4, 0x6a, 255);
 const COLOR_HINT = new Color(0xe9, 0xc4, 0x6a, 255);
+const COLOR_LINE = new Color(0xff, 0xd7, 0x4a, 230);
+/** 有牌时的格子底（与棋盘底区分）；整块随节点 active 一起隐藏 */
+const COLOR_CELL_FACE = new Color(0x3a, 0x4d, 0x6e, 255);
+
+/** 扩展盘外圈映射到本地坐标时，向棋盘内侧拉拢的比例（越大越贴棋盘，越不易伸出画面外） */
+const EDGE_LINE_PULL = 0.32;
 
 @ccclass('LinkUpBoard')
 export class LinkUpBoard extends Component {
     grid: (number | null)[][] = [];
-    private _cells: (Label | null)[][] = [];
+    /** 每个格子根节点（含 Label/Button）；空位时 active=false */
+    private _cells: (Node | null)[][] = [];
     private _sel: { r: number; c: number } | null = null;
     private _cellSize = { w: 64, h: 64 };
-    private _hintCells: Array<{ r: number; c: number; old: Color }> = [];
+    private _hintCells: Array<{ r: number; c: number; oldLab: Color | null; oldSpr: Color | null }> = [];
+    private _lineNode: Node | null = null;
+    /** 来自 GameApp：索引 i 对应类型 id i+1 */
+    private _tileFaceSprites: Array<SpriteFrame | null> = [];
 
     onWin: (() => void) | null = null;
+
+    /** 由 GameApp 传入；可随时调用刷新当前棋盘显示 */
+    setTileFaceSprites(frames: (SpriteFrame | null)[] | null | undefined) {
+        this._tileFaceSprites = [];
+        if (frames && frames.length > 0) {
+            for (let i = 0; i < TILE_SPRITE_SLOTS; i++) {
+                this._tileFaceSprites.push(i < frames.length ? frames[i] ?? null : null);
+            }
+        } else {
+            for (let i = 0; i < TILE_SPRITE_SLOTS; i++) this._tileFaceSprites.push(null);
+        }
+        if (this._cells.length === BOARD_ROWS && this._cells[0]?.length === BOARD_COLS) {
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    this._syncCellVisual(r, c);
+                }
+            }
+            this._applySelectionTint();
+        }
+    }
+
+    private _spriteFrameForType(typeId: number): SpriteFrame | null {
+        if (typeId < 1 || typeId > TILE_SPRITE_SLOTS) return null;
+        return this._tileFaceSprites[typeId - 1] ?? null;
+    }
+
+    private _cellImg(n: Node): Sprite | null {
+        return n.getChildByName('Face')?.getChildByName('Img')?.getComponent(Sprite) ?? null;
+    }
 
     buildLevel() {
         this._clearBoard();
@@ -29,6 +71,7 @@ export class LinkUpBoard extends Component {
 
     private _clearBoard() {
         this.node.removeAllChildren();
+        this._lineNode = null;
         this.grid = [];
         this._cells = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
@@ -49,7 +92,99 @@ export class LinkUpBoard extends Component {
         this._cellSize.h = Math.floor(height / BOARD_ROWS);
     }
 
-    /** 随机填充满且保证至少一对可连；必要时重洗 */
+    /** Label 放在子节点上，避免与 Graphics 同节点时绘制顺序盖住文字 */
+    private _lab(n: Node): Label | null {
+        return n.getChildByName('Lbl')?.getComponent(Label) ?? null;
+    }
+
+    /** 按当前尺寸重画格子底色（仅数字模式：Graphics 开启时） */
+    private _paintCellFace(n: Node, tw: number, th: number) {
+        const face = n.getChildByName('Face');
+        const g = face?.getComponent(Graphics);
+        if (!g || !g.enabled) return;
+        g.clear();
+        g.fillColor = COLOR_CELL_FACE;
+        g.fillRect(-tw / 2, -th / 2, tw, th);
+    }
+
+    /**
+     * 扩展盘坐标 → Board 本地坐标（与格子中心同一套公式）。
+     * 外圈一格默认落在棋盘外一整格宽处，连线容易穿出屏幕；对 pr/pc 为 0 或 最大值的一圈做点向内拉拢。
+     */
+    private _padToLocal(pr: number, pc: number): { x: number; y: number } {
+        const cw = this._cellSize.w;
+        const ch = this._cellSize.h;
+        const originX = -((BOARD_COLS * cw) >> 1);
+        const originY = ((BOARD_ROWS * ch) >> 1);
+        let x = originX + (pc - 1) * cw + cw / 2;
+        let y = originY - (pr - 1) * ch - ch / 2;
+
+        const maxPr = BOARD_ROWS + 1;
+        const maxPc = BOARD_COLS + 1;
+        const k = EDGE_LINE_PULL;
+
+        if (BOARD_ROWS >= 1) {
+            if (pr === 0) {
+                const yInner = originY - ch / 2;
+                y = y + k * (yInner - y);
+            } else if (pr === maxPr) {
+                const yInner = originY - (BOARD_ROWS - 1) * ch - ch / 2;
+                y = y + k * (yInner - y);
+            }
+        }
+        if (BOARD_COLS >= 1) {
+            if (pc === 0) {
+                const xInner = originX + cw / 2;
+                x = x + k * (xInner - x);
+            } else if (pc === maxPc) {
+                const xInner = originX + (BOARD_COLS - 1) * cw + cw / 2;
+                x = x + k * (xInner - x);
+            }
+        }
+
+        return { x, y };
+    }
+
+    private _ensureLineNode(): Graphics {
+        if (this._lineNode && this._lineNode.isValid) {
+            const g = this._lineNode.getComponent(Graphics);
+            if (g) return g;
+        }
+        const n = new Node('ConnectLine');
+        n.setParent(this.node);
+        const ut = n.addComponent(UITransform);
+        const ui = this.node.getComponent(UITransform);
+        if (ui) ut.setContentSize(ui.width, ui.height);
+        n.setPosition(0, 0, 0);
+        const g = n.addComponent(Graphics);
+        this._lineNode = n;
+        return g;
+    }
+
+    private _clearConnectLine = () => {
+        const g = this._lineNode?.getComponent(Graphics);
+        g?.clear();
+    };
+
+    private _drawConnectLine(r1: number, c1: number, r2: number, c2: number) {
+        const path = LinkUpPathFinder.findPath(this.grid, r1, c1, r2, c2);
+        if (!path || path.length < 2) return;
+        const g = this._ensureLineNode();
+        g.clear();
+        g.lineWidth = 5;
+        g.strokeColor = COLOR_LINE;
+        const p0 = this._padToLocal(path[0].r, path[0].c);
+        g.moveTo(p0.x, p0.y);
+        for (let i = 1; i < path.length; i++) {
+            const p = this._padToLocal(path[i].r, path[i].c);
+            g.lineTo(p.x, p.y);
+        }
+        g.stroke();
+        this._lineNode!.setSiblingIndex(this.node.children.length - 1);
+        this.unschedule(this._clearConnectLine);
+        this.scheduleOnce(this._clearConnectLine, 0.42);
+    }
+
     private _fillRandomSolvable() {
         const maxTry = 80;
         for (let t = 0; t < maxTry; t++) {
@@ -69,7 +204,6 @@ export class LinkUpBoard extends Component {
                 return;
             }
         }
-        // 极端 fallback：仍渲染，避免卡死
         this._spawnCells();
     }
 
@@ -82,7 +216,7 @@ export class LinkUpBoard extends Component {
 
     private _spawnCells() {
         this.node.removeAllChildren();
-        const ui = this.node.getComponent(UITransform);
+        this._lineNode = null;
         const cw = this._cellSize.w;
         const ch = this._cellSize.h;
         const originX = -((BOARD_COLS * cw) >> 1);
@@ -92,13 +226,34 @@ export class LinkUpBoard extends Component {
             for (let c = 0; c < BOARD_COLS; c++) {
                 const n = new Node(`cell_${r}_${c}`);
                 n.setParent(this.node);
+                const tw = cw - 2;
+                const th = ch - 2;
                 const ut = n.addComponent(UITransform);
-                ut.setContentSize(cw - 2, ch - 2);
+                ut.setContentSize(tw, th);
                 n.setPosition(originX + c * cw + cw / 2, originY - r * ch - ch / 2, 0);
 
-                const lab = n.addComponent(Label);
+                const faceN = new Node('Face');
+                faceN.setParent(n);
+                faceN.addComponent(UITransform).setContentSize(tw, th);
+                const faceG = faceN.addComponent(Graphics);
+                faceG.fillColor = COLOR_CELL_FACE;
+                faceG.fillRect(-tw / 2, -th / 2, tw, th);
+
+                const imgN = new Node('Img');
+                imgN.setParent(faceN);
+                imgN.addComponent(UITransform).setContentSize(tw, th);
+                const tileSp = imgN.addComponent(Sprite);
+                tileSp.sizeMode = Sprite.SizeMode.CUSTOM;
+                tileSp.enabled = false;
+
+                const lblN = new Node('Lbl');
+                lblN.setParent(n);
+                lblN.addComponent(UITransform).setContentSize(tw, th);
+                lblN.setSiblingIndex(1);
+
+                const lab = lblN.addComponent(Label);
                 lab.string = String(this.grid[r][c] ?? '');
-                lab.fontSize = Math.min(28, Math.floor(Math.min(cw, ch) * 0.45));
+                lab.fontSize = Math.min(26, Math.floor(Math.min(cw, ch) * 0.42));
                 lab.color = Color.WHITE;
                 lab.horizontalAlign = Label.HorizontalAlign.CENTER;
                 lab.verticalAlign = Label.VerticalAlign.CENTER;
@@ -108,7 +263,7 @@ export class LinkUpBoard extends Component {
                 btn.target = n;
                 n.on(Button.EventType.CLICK, () => this._onCellTap(r, c), this);
 
-                this._cells[r][c] = lab;
+                this._cells[r][c] = n;
             }
         }
         this._paintAll();
@@ -117,25 +272,97 @@ export class LinkUpBoard extends Component {
     private _paintAll() {
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
-                const lab = this._cells[r][c];
-                if (!lab) continue;
-                const v = this.grid[r][c];
-                lab.string = v == null ? '' : String(v);
-                lab.color = Color.WHITE;
+                this._syncCellVisual(r, c);
             }
         }
         this._applySelectionTint();
     }
 
+    private _syncCellVisual(r: number, c: number) {
+        const n = this._cells[r][c];
+        if (!n) return;
+        const v = this.grid[r][c];
+        const lab = this._lab(n);
+        const face = n.getChildByName('Face');
+        const g = face?.getComponent(Graphics);
+        const img = this._cellImg(n);
+
+        if (v == null) {
+            const btn = n.getComponent(Button);
+            if (btn) btn.interactable = false;
+            n.active = false;
+            if (lab) {
+                lab.string = '';
+                lab.color = Color.WHITE;
+                lab.enabled = false;
+            }
+            if (img) {
+                img.spriteFrame = null;
+                img.enabled = false;
+                img.color = Color.WHITE;
+            }
+            if (g) {
+                g.enabled = true;
+                g.clear();
+            }
+            return;
+        }
+
+        const btn = n.getComponent(Button);
+        if (btn) btn.interactable = true;
+        n.active = true;
+
+        const ut = n.getComponent(UITransform);
+        const tw = ut?.width ?? 0;
+        const th = ut?.height ?? 0;
+        const sf = this._spriteFrameForType(v);
+
+        if (sf && img) {
+            img.spriteFrame = sf;
+            img.enabled = true;
+            img.sizeMode = Sprite.SizeMode.CUSTOM;
+            img.color = Color.WHITE;
+            if (g) {
+                g.clear();
+                g.enabled = false;
+            }
+            if (lab) {
+                lab.string = '';
+                lab.color = Color.WHITE;
+                lab.enabled = false;
+            }
+        } else {
+            if (img) {
+                img.spriteFrame = null;
+                img.enabled = false;
+                img.color = Color.WHITE;
+            }
+            if (g) {
+                g.enabled = true;
+                this._paintCellFace(n, tw, th);
+            }
+            if (lab) {
+                lab.enabled = true;
+                lab.string = String(v);
+                lab.color = Color.WHITE;
+            }
+        }
+    }
+
     private _applySelectionTint() {
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
-                const lab = this._cells[r][c];
-                if (!lab || this.grid[r][c] == null) continue;
-                if (this._sel && this._sel.r === r && this._sel.c === c) {
-                    lab.color = COLOR_SEL;
-                } else {
-                    lab.color = Color.WHITE;
+                const n = this._cells[r][c];
+                if (!n || !n.active || this.grid[r][c] == null) continue;
+                const v = this.grid[r][c]!;
+                const lab = this._lab(n);
+                const img = this._cellImg(n);
+                const useImg = !!(img?.spriteFrame && this._spriteFrameForType(v));
+                const sel = !!(this._sel && this._sel.r === r && this._sel.c === c);
+                if (useImg && img) {
+                    img.color = sel ? COLOR_SEL : Color.WHITE;
+                } else if (lab) {
+                    lab.color = sel ? COLOR_SEL : Color.WHITE;
                 }
             }
         }
@@ -164,24 +391,17 @@ export class LinkUpBoard extends Component {
             return;
         }
         if (LinkUpPathFinder.canConnect(this.grid, r0, c0, r, c)) {
+            this._drawConnectLine(r0, c0, r, c);
             this.grid[r0][c0] = null;
             this.grid[r][c] = null;
             this._sel = null;
-            this._syncCellLabels(r0, c0);
-            this._syncCellLabels(r, c);
+            this._syncCellVisual(r0, c0);
+            this._syncCellVisual(r, c);
             this._afterChange();
         } else {
             this._sel = { r, c };
             this._applySelectionTint();
         }
-    }
-
-    private _syncCellLabels(r: number, c: number) {
-        const lab = this._cells[r][c];
-        if (!lab) return;
-        const v = this.grid[r][c];
-        lab.string = v == null ? '' : String(v);
-        lab.color = Color.WHITE;
     }
 
     private _isEmpty(): boolean {
@@ -232,10 +452,18 @@ export class LinkUpBoard extends Component {
         if (!p) return;
         this._clearHintVisual();
         const mark = (r: number, c: number) => {
-            const lab = this._cells[r][c];
-            if (!lab) return;
-            this._hintCells.push({ r, c, old: lab.color.clone() });
-            lab.color = COLOR_HINT;
+            const n = this._cells[r][c];
+            if (!n) return;
+            const lab = this._lab(n);
+            const img = this._cellImg(n);
+            const oldLab = lab && lab.string !== '' ? lab.color.clone() : null;
+            const oldSpr =
+                img && img.spriteFrame ? img.color.clone() : null;
+            if (oldLab != null) lab!.color = COLOR_HINT;
+            if (oldSpr != null && img) img.color = COLOR_HINT;
+            if (oldLab != null || oldSpr != null) {
+                this._hintCells.push({ r, c, oldLab, oldSpr });
+            }
         };
         mark(p.r1, p.c1);
         mark(p.r2, p.c2);
@@ -245,13 +473,17 @@ export class LinkUpBoard extends Component {
 
     private _clearHintVisual = () => {
         for (const h of this._hintCells) {
-            const lab = this._cells[h.r][h.c];
-            if (lab) lab.color = h.old;
+            const n = this._cells[h.r][h.c];
+            if (!n) continue;
+            const lab = this._lab(n);
+            const img = this._cellImg(n);
+            if (h.oldLab != null && lab) lab.color = h.oldLab;
+            if (h.oldSpr != null && img && img.spriteFrame) img.color = h.oldSpr;
         }
         this._hintCells.length = 0;
+        this._applySelectionTint();
     };
 
-    /** 重排场上剩余牌；ensurePair 为 true 时保证至少一对可连 */
     shuffleAll(ensurePair: boolean) {
         const bag: number[] = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
@@ -280,13 +512,12 @@ export class LinkUpBoard extends Component {
         this._sel = null;
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
-                this._syncCellLabels(r, c);
+                this._syncCellVisual(r, c);
             }
         }
         this._applySelectionTint();
     }
 
-    /** 随机消除两个仍有牌的格子（不必同类） */
     removeTwoRandomTiles() {
         const occ: Array<{ r: number; c: number }> = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
@@ -301,7 +532,7 @@ export class LinkUpBoard extends Component {
             while (i2 === i1) i2 = Math.floor(Math.random() * occ.length);
         } else {
             this.grid[occ[i1].r][occ[i1].c] = null;
-            this._syncCellLabels(occ[i1].r, occ[i1].c);
+            this._syncCellVisual(occ[i1].r, occ[i1].c);
             this._afterChange();
             return;
         }
@@ -309,13 +540,16 @@ export class LinkUpBoard extends Component {
         const b = occ[i2];
         this.grid[a.r][a.c] = null;
         this.grid[b.r][b.c] = null;
-        this._syncCellLabels(a.r, a.c);
-        this._syncCellLabels(b.r, b.c);
+        this._syncCellVisual(a.r, a.c);
+        this._syncCellVisual(b.r, b.c);
         this._sel = null;
         this._afterChange();
     }
 
     resizeToParent() {
+        if (this._cells.length !== BOARD_ROWS || !this._cells[0] || this._cells[0].length !== BOARD_COLS) {
+            return;
+        }
         this._ensureLayout();
         const cw = this._cellSize.w;
         const ch = this._cellSize.h;
@@ -323,15 +557,27 @@ export class LinkUpBoard extends Component {
         const originY = ((BOARD_ROWS * ch) >> 1);
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
-                const lab = this._cells[r][c];
-                if (!lab) continue;
-                const n = lab.node;
+                const n = this._cells[r][c];
+                if (!n) continue;
                 const ut = n.getComponent(UITransform);
                 if (ut) {
-                    ut.setContentSize(cw - 2, ch - 2);
+                    const tw = cw - 2;
+                    const th = ch - 2;
+                    ut.setContentSize(tw, th);
                     n.setPosition(originX + c * cw + cw / 2, originY - r * ch - ch / 2, 0);
+                    n.getChildByName('Face')?.getComponent(UITransform)?.setContentSize(tw, th);
+                    n.getChildByName('Face')?.getChildByName('Img')?.getComponent(UITransform)?.setContentSize(tw, th);
+                    n.getChildByName('Lbl')?.getComponent(UITransform)?.setContentSize(tw, th);
+                    const lab = this._lab(n);
+                    if (lab) lab.fontSize = Math.min(26, Math.floor(Math.min(cw, ch) * 0.42));
+                    if (n.active) this._syncCellVisual(r, c);
                 }
             }
+        }
+        const ui = this.node.getComponent(UITransform);
+        const ln = this._lineNode;
+        if (ln && ui) {
+            ln.getComponent(UITransform)?.setContentSize(ui.width, ui.height);
         }
     }
 }
