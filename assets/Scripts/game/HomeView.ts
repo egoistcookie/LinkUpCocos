@@ -109,8 +109,9 @@ export class HomeView extends Component {
 
         const startNd = root.getChildByName('StartGame');
         if (startNd) {
-            // 屏幕正中略偏下，逻辑简单；z 取正，保证在 Bg（若有）之上
-            startNd.setPosition(0, -h * 0.15, 100);
+            // 屏幕正中略偏下；相对 -h*0.15 再下移 70px（原 30 + 20）
+            const START_Y_OFFSET = -70;
+            startNd.setPosition(0, -h * 0.15 + START_Y_OFFSET, 100);
         }
 
         if (bg) bg.setSiblingIndex(0);

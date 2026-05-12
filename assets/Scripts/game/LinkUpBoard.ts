@@ -59,6 +59,15 @@ export class LinkUpBoard extends Component {
         return this._tileFaceSprites[typeId - 1] ?? null;
     }
 
+    /** buildLevel/_spawnCells 完成前 grid 未初始化，避免工具按钮访问 undefined */
+    private _layoutReady(): boolean {
+        return (
+            this.grid.length === BOARD_ROWS &&
+            !!this.grid[0] &&
+            this.grid[0].length === BOARD_COLS
+        );
+    }
+
     private _cellImg(n: Node): Sprite | null {
         return n.getChildByName('Face')?.getChildByName('Img')?.getComponent(Sprite) ?? null;
     }
@@ -428,6 +437,7 @@ export class LinkUpBoard extends Component {
     }
 
     findHintPair(): { r1: number; c1: number; r2: number; c2: number } | null {
+        if (!this._layoutReady()) return null;
         for (let r1 = 0; r1 < BOARD_ROWS; r1++) {
             for (let c1 = 0; c1 < BOARD_COLS; c1++) {
                 const a = this.grid[r1][c1];
@@ -485,6 +495,7 @@ export class LinkUpBoard extends Component {
     };
 
     shuffleAll(ensurePair: boolean) {
+        if (!this._layoutReady()) return;
         const bag: number[] = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
@@ -519,6 +530,7 @@ export class LinkUpBoard extends Component {
     }
 
     removeTwoRandomTiles() {
+        if (!this._layoutReady()) return;
         const occ: Array<{ r: number; c: number }> = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {

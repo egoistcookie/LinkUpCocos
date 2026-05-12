@@ -13,7 +13,7 @@ import {
     Widget,
     view,
 } from 'cc';
-import { GameView } from './game/GameView';
+import { GameView, type GameToolButtonSprites } from './game/GameView';
 import { HomeView } from './game/HomeView';
 import { TILE_SPRITE_SLOTS } from './game/LinkUpBoard';
 import { linkDumpNode, linkLayerVsCamera, linkLog, linkWarn, nodePath } from './util/LinkUpDebug';
@@ -29,6 +29,10 @@ export class GameApp extends Component {
     @property(SpriteFrame)
     homeBackground: SpriteFrame | null = null;
 
+    /** 可选：游戏主体页全屏背景；不赋值则与现有一致（顶栏/棋盘区/底栏各自底色，其余为摄像机清屏色） */
+    @property(SpriteFrame)
+    gameBackground: SpriteFrame | null = null;
+
     /**
      * 棋盘格子贴图：第 i 项对应「i+1 号」格子类型（与盘面数字一致）。
      * 若某项配置了 SpriteFrame，该局该类型格子整格显示贴图且不显示数字；留空则显示数字。
@@ -38,6 +42,27 @@ export class GameApp extends Component {
         tooltip: `共 ${TILE_SPRITE_SLOTS} 项：索引 0→1号 … 索引 29→30号；未配置则该局显示数字`,
     })
     tileFaceSprites: Array<SpriteFrame | null> = [];
+
+    /** 游戏页：返回（普通 / 按下） */
+    @property(SpriteFrame)
+    toolBtnBackNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    toolBtnBackPressed: SpriteFrame | null = null;
+    /** 提示 */
+    @property(SpriteFrame)
+    toolBtnHintNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    toolBtnHintPressed: SpriteFrame | null = null;
+    /** 刷新 */
+    @property(SpriteFrame)
+    toolBtnRefreshNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    toolBtnRefreshPressed: SpriteFrame | null = null;
+    /** 消除 */
+    @property(SpriteFrame)
+    toolBtnEliminateNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    toolBtnEliminatePressed: SpriteFrame | null = null;
 
     private _home: HomeView | null = null;
     private _game: GameView | null = null;
@@ -97,6 +122,18 @@ export class GameApp extends Component {
         if (this._game) {
             this._game.onBack = () => this._enterHome();
             this._game.setTileFaceSprites(this.tileFaceSprites ?? []);
+            const toolBtns: GameToolButtonSprites = {
+                backNormal: this.toolBtnBackNormal,
+                backPressed: this.toolBtnBackPressed,
+                hintNormal: this.toolBtnHintNormal,
+                hintPressed: this.toolBtnHintPressed,
+                refreshNormal: this.toolBtnRefreshNormal,
+                refreshPressed: this.toolBtnRefreshPressed,
+                eliminateNormal: this.toolBtnEliminateNormal,
+                eliminatePressed: this.toolBtnEliminatePressed,
+            };
+            this._game.setToolButtonSprites(toolBtns);
+            this._game.setGameBackground(this.gameBackground);
         }
         this.scheduleOnce(() => this._debugPipelineSnapshot('GameApp.start+0'), 0);
     }
@@ -287,6 +324,7 @@ export class GameApp extends Component {
             c.getComponent(Widget)?.updateAlignment();
         }
         this._home?.relayout();
+        this._game?.relayout();
 
         linkLog('GameApp._sync', 'Canvas/App/UICamera', {
             canvas: canvas.name,

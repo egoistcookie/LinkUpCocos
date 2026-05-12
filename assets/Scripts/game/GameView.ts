@@ -17,8 +17,24 @@ import { getStableVisibleSize } from '../util/ViewSize';
 
 const { ccclass } = _decorator;
 
+/** 游戏页工具按钮贴图：由 GameApp 注入；未配置项则回退到 resources/icon 动态加载 */
+export type GameToolButtonSprites = {
+    backNormal: SpriteFrame | null;
+    backPressed: SpriteFrame | null;
+    hintNormal: SpriteFrame | null;
+    hintPressed: SpriteFrame | null;
+    refreshNormal: SpriteFrame | null;
+    refreshPressed: SpriteFrame | null;
+    eliminateNormal: SpriteFrame | null;
+    eliminatePressed: SpriteFrame | null;
+};
+
 const C_BAR = new Color(0x0d, 0x1b, 0x2a, 220);
 const C_BTN = new Color(0x41, 0x5a, 0x77, 255);
+
+/** 棋盘区高度比原中间槽再缩小（与背景无关） */
+const BOARD_SLOT_H_SHRINK = 20;
+const BOARD_SLOT_H_SHRINK_HALF = BOARD_SLOT_H_SHRINK >> 1;
 
 /**
  * resources 下资源基路径（相对 assets/resources/，无 .png、无 /spriteFrame）。
@@ -40,6 +56,44 @@ function addCenterFillRect(node: Node, w: number, h: number, fill: Color) {
     g.fillRect(-w / 2, -h / 2, w, h);
 }
 
+/** 与 BoardHolder 上 Widget 边距一致；用 GameRoot 尺寸算出棋盘区宽高，不依赖 bhUt 首帧 */
+function boardHolderLayoutFromRoot(root: Node): {
+    w: number;
+    h: number;
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+} {
+    const ut = root.getComponent(UITransform);
+    const vs = getStableVisibleSize();
+    const lw = ut && ut.width > 1 ? ut.width : vs.width;
+    const lh = ut && ut.height > 1 ? ut.height : vs.height;
+    const BAR_TOP = 88;
+    const BAR_BOT = 100;
+    const STRIP_GAP = 12;
+    const SYMM_PAD = 50;
+    const edgeInset = Math.max(BAR_TOP + STRIP_GAP, BAR_BOT + STRIP_GAP) + SYMM_PAD;
+    const boardSideInset = 24 + 50;
+    return {
+        w: lw - boardSideInset * 2,
+        h: lh - edgeInset * 2 - BOARD_SLOT_H_SHRINK,
+        top: edgeInset + BOARD_SLOT_H_SHRINK_HALF,
+        bottom: edgeInset + BOARD_SLOT_H_SHRINK_HALF,
+        left: boardSideInset,
+        right: boardSideInset,
+    };
+}
+
+function gameRootFullSize(root: Node): { w: number; h: number } {
+    const ut = root.getComponent(UITransform);
+    const vs = getStableVisibleSize();
+    return {
+        w: ut && ut.width > 1 ? ut.width : vs.width,
+        h: ut && ut.height > 1 ? ut.height : vs.height,
+    };
+}
+
 @ccclass('GameView')
 export class GameView extends Component {
     private _level = 1;
@@ -47,16 +101,28 @@ export class GameView extends Component {
     private _board: LinkUpBoard | null = null;
     /** GameApp.start 可能在异步 _buildUi 完成前就注入格子贴图；此时 _board 尚不存在，需延后应用到 LinkUpBoard */
     private _tileFaceCache: Array<SpriteFrame | null> | null = null;
+    /** GameApp.start 注入；父节点 start 晚于子 onLoad，须在 _buildUi 内延后一帧再读 */
+    private _toolBtnSprites: Partial<GameToolButtonSprites> | null = null;
+    /** 若「开始游戏」早于异步 _buildUi 建完棋盘，则在此补开局 */
+    private _pendingStartLevel: number | null = null;
+    /** GameApp 注入的全屏游戏页背景；未配置则不建 GameBg */
+    private _gameBackground: SpriteFrame | null = null;
+    private _gameBgNode: Node | null = null;
 
     onBack: (() => void) | null = null;
 
-    onLoad() {
+    /** GameRoot 初始常为 inactive：start 在首次激活后调用，晚于同帧已执行过的 GameApp.start，可读到 App 上配置的按钮贴图 */
+    start() {
         void this._buildUi();
     }
 
     beginOrRestartLevel(level: number) {
         this._level = level;
         if (this._levelLabel) this._levelLabel.string = `第 ${this._level} 关`;
+        if (!this._board) {
+            this._pendingStartLevel = level;
+            return;
+        }
         this.scheduleOnce(() => {
             this._board?.buildLevel();
             this._board?.resizeToParent();
@@ -71,16 +137,62 @@ export class GameView extends Component {
         }
     }
 
+    /** 顶栏返回 + 底栏提示/刷新/消除 共 8 张（普通+按下），由 GameApp 注入；留空则用 resources 默认 icon */
+    setToolButtonSprites(sprites: Partial<GameToolButtonSprites> | null) {
+        this._toolBtnSprites = sprites && Object.keys(sprites).length > 0 ? { ...sprites } : null;
+    }
+
+    /** 游戏主体页全屏背景，由 GameApp 注入 */
+    setGameBackground(sf: SpriteFrame | null) {
+        this._gameBackground = sf;
+        if (!this._gameBgNode?.isValid) return;
+        if (!sf) {
+            this._gameBgNode.destroy();
+            this._gameBgNode = null;
+            return;
+        }
+        const sp = this._gameBgNode.getComponent(Sprite);
+        if (sp) {
+            sp.spriteFrame = sf;
+            sp.enabled = true;
+        }
+        this.scheduleOnce(() => this.relayout(), 0);
+    }
+
+    /** Canvas 尺寸变化时：BoardHolder 与全屏 GameBg */
+    relayout() {
+        const holder = this.node.getChildByName('BoardHolder');
+        if (holder?.isValid) {
+            const lay = boardHolderLayoutFromRoot(this.node);
+            const bhW = holder.getComponent(Widget);
+            if (bhW) {
+                bhW.top = lay.top;
+                bhW.bottom = lay.bottom;
+                bhW.left = lay.left;
+                bhW.right = lay.right;
+                bhW.updateAlignment();
+            }
+            const bhUt = holder.getComponent(UITransform);
+            if (bhUt) bhUt.setContentSize(lay.w, lay.h);
+        }
+        const bg = this._gameBgNode;
+        if (bg?.isValid) {
+            const { w, h } = gameRootFullSize(this.node);
+            const bgUt = bg.getComponent(UITransform);
+            if (bgUt) bgUt.setContentSize(w, h);
+            bg.getComponent(Widget)?.updateAlignment();
+            const sp = bg.getComponent(Sprite);
+            if (sp) sp.sizeMode = Sprite.SizeMode.CUSTOM;
+        }
+        this._board?.resizeToParent();
+    }
+
     private async _buildUi() {
-        let sfBack: SpriteFrame | null = null;
-        let sfHint: SpriteFrame | null = null;
-        let sfRefresh: SpriteFrame | null = null;
-        let sfElim: SpriteFrame | null = null;
-        let sfBack1: SpriteFrame | null = null;
-        let sfHint1: SpriteFrame | null = null;
-        let sfRefresh1: SpriteFrame | null = null;
-        let sfElim1: SpriteFrame | null = null;
-        [
+        const o = this._toolBtnSprites;
+        const pick = (path: string, fromApp: SpriteFrame | null | undefined) =>
+            fromApp != null ? Promise.resolve(fromApp) : GameView._loadSpriteFrame(path);
+
+        const [
             sfBack,
             sfHint,
             sfRefresh,
@@ -90,18 +202,18 @@ export class GameView extends Component {
             sfRefresh1,
             sfElim1,
         ] = await Promise.all([
-            GameView._loadSpriteFrame(ICON_BACK),
-            GameView._loadSpriteFrame(ICON_HINT),
-            GameView._loadSpriteFrame(ICON_REFRESH),
-            GameView._loadSpriteFrame(ICON_ELIMINATE),
-            GameView._loadSpriteFrame(ICON_BACK_DOWN),
-            GameView._loadSpriteFrame(ICON_HINT_DOWN),
-            GameView._loadSpriteFrame(ICON_REFRESH_DOWN),
-            GameView._loadSpriteFrame(ICON_ELIMINATE_DOWN),
+            pick(ICON_BACK, o?.backNormal),
+            pick(ICON_HINT, o?.hintNormal),
+            pick(ICON_REFRESH, o?.refreshNormal),
+            pick(ICON_ELIMINATE, o?.eliminateNormal),
+            pick(ICON_BACK_DOWN, o?.backPressed),
+            pick(ICON_HINT_DOWN, o?.hintPressed),
+            pick(ICON_REFRESH_DOWN, o?.refreshPressed),
+            pick(ICON_ELIMINATE_DOWN, o?.eliminatePressed),
         ]);
         if (!sfBack || !sfHint || !sfRefresh || !sfElim) {
             console.warn(
-                '[GameView] 部分按钮贴图未加载成功；请确认 resources/icon 下存在对应 PNG，类型为 sprite-frame，且路径形如 icon/返回/spriteFrame',
+                '[GameView] 部分按钮贴图未加载成功；可在 App 节点 GameApp 上配置 8 项按钮贴图，或确认 resources/icon 下存在对应 PNG（sprite-frame），路径形如 icon/返回/spriteFrame',
             );
         }
 
@@ -115,7 +227,29 @@ export class GameView extends Component {
         w.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
         w.updateAlignment();
 
-        // 先建棋盘区域并置于最底层，避免全屏 BoardHolder 盖住顶栏、底栏
+        const bgSf = this._gameBackground;
+        if (bgSf) {
+            const bgNode = new Node('GameBg');
+            bgNode.setParent(root);
+            bgNode.setSiblingIndex(0);
+            const full = gameRootFullSize(root);
+            const bgUt = bgNode.addComponent(UITransform);
+            const bgWg = bgNode.addComponent(Widget);
+            bgWg.isAlignTop = bgWg.isAlignBottom = bgWg.isAlignLeft = bgWg.isAlignRight = true;
+            bgWg.top = bgWg.bottom = bgWg.left = bgWg.right = 0;
+            bgWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+            bgWg.updateAlignment();
+            bgUt.setContentSize(full.w, full.h);
+            bgNode.setPosition(0, 0, -20);
+            const bgSp = bgNode.addComponent(Sprite);
+            bgSp.spriteFrame = bgSf;
+            bgSp.sizeMode = Sprite.SizeMode.CUSTOM;
+            bgSp.color = Color.WHITE;
+            this._gameBgNode = bgNode;
+        } else {
+            this._gameBgNode = null;
+        }
+
         const boardHolder = new Node('BoardHolder');
         boardHolder.setParent(root);
         const bhUt = boardHolder.addComponent(UITransform);
@@ -124,20 +258,14 @@ export class GameView extends Component {
         bhW.isAlignBottom = true;
         bhW.isAlignLeft = true;
         bhW.isAlignRight = true;
-        // 上下边距对称，棋盘区域竖直中心与整屏一致；数值需 ≥ 顶栏/底栏占位 + 间隙
-        const BAR_TOP = 88;
-        const BAR_BOT = 100;
-        const STRIP_GAP = 12;
-        const SYMM_PAD = 50; // 上下各多 50，总高约少 100，且保持对称
-        const edgeInset = Math.max(BAR_TOP + STRIP_GAP, BAR_BOT + STRIP_GAP) + SYMM_PAD;
-        bhW.top = edgeInset;
-        bhW.bottom = edgeInset;
-        bhW.left = bhW.right = 24;
+        const lay = boardHolderLayoutFromRoot(root);
+        bhW.top = lay.top;
+        bhW.bottom = lay.bottom;
+        bhW.left = lay.left;
+        bhW.right = lay.right;
         bhW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
         bhW.updateAlignment();
-        bhUt.setContentSize(vs.width - 48, vs.height - edgeInset * 2);
-
-        addCenterFillRect(boardHolder, bhUt.width, bhUt.height, new Color(0x1b, 0x26, 0x3b, 255));
+        bhUt.setContentSize(lay.w, lay.h);
 
         const boardNode = new Node('Board');
         boardNode.setParent(boardHolder);
@@ -148,7 +276,7 @@ export class GameView extends Component {
         bW.top = bW.bottom = bW.left = bW.right = 0;
         bW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
         bW.updateAlignment();
-        bUt.setContentSize(bhUt.width, bhUt.height);
+        bUt.setContentSize(lay.w, lay.h);
 
         this._board = boardNode.addComponent(LinkUpBoard);
         this._board.onWin = () => {
@@ -158,7 +286,7 @@ export class GameView extends Component {
             this._board.setTileFaceSprites(this._tileFaceCache);
         }
 
-        boardHolder.setSiblingIndex(0);
+        // 子节点顺序：GameRoot 下 GameBg(若有) → BoardHolder → TopBar → BottomBar
 
         const top = new Node('TopBar');
         top.setParent(root);
@@ -200,6 +328,9 @@ export class GameView extends Component {
         backW.left = 8;
         backW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
         backW.updateAlignment();
+        if (sfBack) {
+            backN.addComponent(Sprite);
+        }
         const bbtn = backN.addComponent(Button);
         bbtn.target = backN;
         this._mountSpriteButton(backN, 160, 64, sfBack, sfBack1, bbtn);
@@ -229,6 +360,9 @@ export class GameView extends Component {
             n.setParent(bottom);
             n.addComponent(UITransform).setContentSize(200, 72);
             n.setPosition(x, 28, 0);
+            if (sf) {
+                n.addComponent(Sprite);
+            }
             const btn = n.addComponent(Button);
             btn.target = n;
             this._mountSpriteButton(n, 200, 72, sf, sfDown, btn);
@@ -238,11 +372,24 @@ export class GameView extends Component {
         mkTool('Hint', -220, sfHint, sfHint1, () => this._board?.showHint());
         mkTool('Refresh', 0, sfRefresh, sfRefresh1, () => this._board?.shuffleAll(true));
         mkTool('Eliminate', 220, sfElim, sfElim1, () => this._board?.removeTwoRandomTiles());
+
+        if (this._pendingStartLevel != null) {
+            const lv = this._pendingStartLevel;
+            this._pendingStartLevel = null;
+            this._level = lv;
+            if (this._levelLabel) this._levelLabel.string = `第 ${lv} 关`;
+            this._board.buildLevel();
+            this.scheduleOnce(() => this._board?.resizeToParent(), 0);
+        }
+
+        if (this._gameBgNode) {
+            this.scheduleOnce(() => this.relayout(), 0);
+        }
     }
 
     /**
-     * 按钮贴图：普通态 + 按下态（`*1` 资源）；使用 SPRITE 过渡。
-     * 无按下资源时用普通图代替；无普通图则纯色块 + NONE。
+     * 按钮贴图：普通态 + 按下态。Sprite 须在 Button 之前挂上（见调用处），否则 SPRITE 过渡易失效。
+     * 按下态改为 TOUCH 手动换 spriteFrame，与预览 / 微信一致；无按下图时用普通图。
      */
     private _mountSpriteButton(
         node: Node,
@@ -257,16 +404,21 @@ export class GameView extends Component {
             btn.transition = Button.Transition.NONE;
             return;
         }
-        const sp = node.addComponent(Sprite);
+        const sp = node.getComponent(Sprite) ?? node.addComponent(Sprite);
         sp.spriteFrame = sfNormal;
         sp.sizeMode = Sprite.SizeMode.CUSTOM;
         sp.color = Color.WHITE;
-        const press = sfPressed ?? sfNormal;
-        btn.transition = Button.Transition.SPRITE;
-        btn.normalSprite = sfNormal;
-        btn.pressedSprite = press;
-        btn.hoverSprite = sfNormal;
-        btn.disabledSprite = sfNormal;
+        btn.transition = Button.Transition.NONE;
+        const pressSf = sfPressed ?? sfNormal;
+        const toNormal = () => {
+            if (sp.isValid && sfNormal) sp.spriteFrame = sfNormal;
+        };
+        const toPress = () => {
+            if (sp.isValid) sp.spriteFrame = pressSf;
+        };
+        node.on(Node.EventType.TOUCH_START, toPress, node);
+        node.on(Node.EventType.TOUCH_END, toNormal, node);
+        node.on(Node.EventType.TOUCH_CANCEL, toNormal, node);
     }
 
     /** Creator 3.x 单图导入为 sprite-frame 时，子资源路径需带 `/spriteFrame`，仅写 png 基名往往拿不到 SpriteFrame */
