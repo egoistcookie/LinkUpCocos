@@ -343,14 +343,6 @@
         "__expectedType__": "cc.SpriteFrame"
       },
       {
-        "__uuid__": "4643e45b-ead0-432f-a4fb-46722f7eec34@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "aa27edf7-8333-4d27-8953-dbcc553034a6@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
         "__uuid__": "483e5564-2387-49b8-9491-d459351d8726@f9941",
         "__expectedType__": "cc.SpriteFrame"
       },
@@ -405,22 +397,6 @@
       {
         "__uuid__": "174a5a54-4a39-4bdd-897d-2a3efd2cdd66@f9941",
         "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "9831fa7b-7c2a-4edd-a38c-175920b76600@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "fde1e387-b532-42b9-a247-c190d9a3c9ad@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "a3d85b2b-dae3-4fb2-93ef-1fad68dc7156@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "2d7cdc06-2c56-48d0-a8d7-eb7c49178b27@f9941",
-        "__expectedType__": "cc.SpriteFrame"
       }
     ],
     "toolBtnBackNormal": {
@@ -455,6 +431,17 @@
       "__uuid__": "1485e2a3-4837-49f3-b9a7-3850b46d8b80@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
+    "sfxConnect": {
+      "__uuid__": "ee7deb7e-543e-4ed7-98a4-c3353fda72dc",
+      "__expectedType__": "cc.AudioClip"
+    },
+    "sfxHint": null,
+    "sfxRefresh": null,
+    "sfxEliminate": null,
+    "noConnectDialogMessage": "场上没有可连线方块，自动刷新",
+    "noConnectDialogTitle": "",
+    "noConnectDialogAutoDelay": 1.2,
+    "noConnectDialogPanelBg": null,
     "_id": "d4oRDiBEtChrSMx1K20q3/"
   },
   {

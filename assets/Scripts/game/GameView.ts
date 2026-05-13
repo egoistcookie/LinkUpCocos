@@ -1,5 +1,7 @@
 import {
     _decorator,
+    AudioClip,
+    AudioSource,
     Button,
     Color,
     Component,
@@ -27,6 +29,25 @@ export type GameToolButtonSprites = {
     refreshPressed: SpriteFrame | null;
     eliminateNormal: SpriteFrame | null;
     eliminatePressed: SpriteFrame | null;
+};
+
+/** 无可连对时的提示（由 GameApp 配置） */
+export type NoConnectDialogConfig = {
+    message: string;
+    /** 副标题，可留空 */
+    title: string;
+    /** 展示多少秒后自动 shuffle */
+    autoDelay: number;
+    /** 弹窗底板图，不配置则用纯色块 */
+    panelBg: SpriteFrame | null;
+};
+
+/** 游戏页音效：由 GameApp 注入；未配置则不播放 */
+export type GameSfxConfig = {
+    connect: AudioClip | null;
+    hint: AudioClip | null;
+    refresh: AudioClip | null;
+    eliminate: AudioClip | null;
 };
 
 const C_BAR = new Color(0x0d, 0x1b, 0x2a, 220);
@@ -108,6 +129,10 @@ export class GameView extends Component {
     /** GameApp 注入的全屏游戏页背景；未配置则不建 GameBg */
     private _gameBackground: SpriteFrame | null = null;
     private _gameBgNode: Node | null = null;
+    private _sfx: GameSfxConfig | null = null;
+    private _audioSource: AudioSource | null = null;
+    private _noConnectCfg: NoConnectDialogConfig | null = null;
+    private _noConnectTimerGen = 0;
 
     onBack: (() => void) | null = null;
 
@@ -129,12 +154,13 @@ export class GameView extends Component {
         }, 0);
     }
 
-    /** 棋盘格子贴图（30 项），由 GameApp 注入 */
+    /** 棋盘格子贴图（与 TILE_SPRITE_SLOTS 一致，由 GameApp 注入） */
     setTileFaceSprites(frames: Array<SpriteFrame | null>) {
         this._tileFaceCache = frames.length > 0 ? [...frames] : [];
         if (this._board) {
             this._board.setTileFaceSprites(this._tileFaceCache);
         }
+        this._wireBoardCallbacks();
     }
 
     /** 顶栏返回 + 底栏提示/刷新/消除 共 8 张（普通+按下），由 GameApp 注入；留空则用 resources 默认 icon */
@@ -157,6 +183,18 @@ export class GameView extends Component {
             sp.enabled = true;
         }
         this.scheduleOnce(() => this.relayout(), 0);
+    }
+
+    /** 连线成功 / 底栏工具音效，由 GameApp 注入 */
+    setGameSfx(sfx: GameSfxConfig | null) {
+        this._sfx = sfx && (sfx.connect || sfx.hint || sfx.refresh || sfx.eliminate) ? { ...sfx } : null;
+        this._wireBoardCallbacks();
+    }
+
+    /** 无可连对提示文案与自动刷新延迟，由 GameApp 注入；传 null 则恢复为仅洗牌、不弹窗 */
+    setNoConnectDialog(cfg: NoConnectDialogConfig | null) {
+        this._noConnectCfg = cfg ? { ...cfg } : null;
+        this._wireBoardCallbacks();
     }
 
     /** Canvas 尺寸变化时：BoardHolder 与全屏 GameBg */
@@ -285,6 +323,7 @@ export class GameView extends Component {
         if (this._tileFaceCache && this._tileFaceCache.length > 0) {
             this._board.setTileFaceSprites(this._tileFaceCache);
         }
+        this._wireBoardCallbacks();
 
         // 子节点顺序：GameRoot 下 GameBg(若有) → BoardHolder → TopBar → BottomBar
 
@@ -369,9 +408,18 @@ export class GameView extends Component {
             n.on(Button.EventType.CLICK, handler, this);
         };
 
-        mkTool('Hint', -220, sfHint, sfHint1, () => this._board?.showHint());
-        mkTool('Refresh', 0, sfRefresh, sfRefresh1, () => this._board?.shuffleAll(true));
-        mkTool('Eliminate', 220, sfElim, sfElim1, () => this._board?.removeTwoRandomTiles());
+        mkTool('Hint', -220, sfHint, sfHint1, () => {
+            this._playSfx(this._sfx?.hint);
+            this._board?.showHint();
+        });
+        mkTool('Refresh', 0, sfRefresh, sfRefresh1, () => {
+            this._playSfx(this._sfx?.refresh);
+            this._board?.shuffleAll(true);
+        });
+        mkTool('Eliminate', 220, sfElim, sfElim1, () => {
+            this._playSfx(this._sfx?.eliminate);
+            this._board?.removeTwoRandomTiles();
+        });
 
         if (this._pendingStartLevel != null) {
             const lv = this._pendingStartLevel;
@@ -385,6 +433,134 @@ export class GameView extends Component {
         if (this._gameBgNode) {
             this.scheduleOnce(() => this.relayout(), 0);
         }
+    }
+
+    private _wireBoardCallbacks() {
+        if (!this._board) return;
+        this._board.onConnectSfx = () => {
+            this._playSfx(this._sfx?.connect);
+        };
+        this._board.onNoConnectablePair = this._noConnectCfg
+            ? () => {
+                  this._openNoConnectDialogAndRefresh();
+              }
+            : null;
+    }
+
+    private _openNoConnectDialogAndRefresh() {
+        const cfg = this._noConnectCfg;
+        if (!cfg || !this.node.isValid) {
+            this._board?.shuffleAll(true);
+            return;
+        }
+        const root = this.node;
+        const prev = root.getChildByName('NoConnectOverlay');
+        prev?.destroy();
+
+        const myGen = ++this._noConnectTimerGen;
+        const { w, h } = gameRootFullSize(root);
+        const layer = new Node('NoConnectOverlay');
+        layer.setParent(root);
+        layer.setSiblingIndex(root.children.length - 1);
+        const layerUt = layer.addComponent(UITransform);
+        layerUt.setContentSize(w, h);
+        const layerWg = layer.addComponent(Widget);
+        layerWg.isAlignTop = layerWg.isAlignBottom = layerWg.isAlignLeft = layerWg.isAlignRight = true;
+        layerWg.top = layerWg.bottom = layerWg.left = layerWg.right = 0;
+        layerWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        layerWg.updateAlignment();
+
+        const dim = new Node('Dim');
+        dim.setParent(layer);
+        const dimUt = dim.addComponent(UITransform);
+        dimUt.setContentSize(w, h);
+        const dimWg = dim.addComponent(Widget);
+        dimWg.isAlignTop = dimWg.isAlignBottom = dimWg.isAlignLeft = dimWg.isAlignRight = true;
+        dimWg.top = dimWg.bottom = dimWg.left = dimWg.right = 0;
+        dimWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        dimWg.updateAlignment();
+        const dimG = dim.addComponent(Graphics);
+        dimG.fillColor = new Color(0, 0, 0, 160);
+        dimG.fillRect(-w / 2, -h / 2, w, h);
+        const dimBtn = dim.addComponent(Button);
+        dimBtn.transition = Button.Transition.NONE;
+        dimBtn.target = dim;
+
+        const panelW = Math.min(520, w - 48);
+        const hasTitle = !!(cfg.title && cfg.title.trim());
+        const panelH = hasTitle ? 150 : 120;
+        const panel = new Node('Panel');
+        panel.setParent(layer);
+        const pUt = panel.addComponent(UITransform);
+        pUt.setContentSize(panelW, panelH);
+        panel.setPosition(0, 0, 0);
+        const pWg = panel.addComponent(Widget);
+        pWg.isAlignHorizontalCenter = true;
+        pWg.isAlignVerticalCenter = true;
+        pWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        pWg.updateAlignment();
+
+        if (cfg.panelBg) {
+            const sp = panel.addComponent(Sprite);
+            sp.spriteFrame = cfg.panelBg;
+            sp.sizeMode = Sprite.SizeMode.CUSTOM;
+            sp.color = Color.WHITE;
+        } else {
+            const pg = panel.addComponent(Graphics);
+            pg.fillColor = new Color(0x12, 0x1e, 0x2e, 245);
+            pg.fillRect(-panelW / 2, -panelH / 2, panelW, panelH);
+        }
+
+        if (hasTitle) {
+            const titleN = new Node('Title');
+            titleN.setParent(panel);
+            titleN.addComponent(UITransform).setContentSize(panelW - 32, 36);
+            titleN.setPosition(0, 38, 0);
+            const tl = titleN.addComponent(Label);
+            tl.string = cfg.title.trim();
+            tl.fontSize = 22;
+            tl.color = new Color(0xff, 0xe0, 0xa0, 255);
+            tl.horizontalAlign = Label.HorizontalAlign.CENTER;
+            tl.verticalAlign = Label.VerticalAlign.CENTER;
+            tl.overflow = Label.Overflow.RESIZE_HEIGHT;
+        }
+
+        const msgN = new Node('Message');
+        msgN.setParent(panel);
+        msgN.addComponent(UITransform).setContentSize(panelW - 40, panelH - 24);
+        msgN.setPosition(0, hasTitle ? -8 : 0, 0);
+        const ml = msgN.addComponent(Label);
+        ml.string = cfg.message || '场上没有可连线方块，自动刷新';
+        ml.fontSize = 20;
+        ml.color = Color.WHITE;
+        ml.horizontalAlign = Label.HorizontalAlign.CENTER;
+        ml.verticalAlign = Label.VerticalAlign.CENTER;
+        ml.overflow = Label.Overflow.RESIZE_HEIGHT;
+
+        const delay = Math.max(0.25, cfg.autoDelay);
+        this.scheduleOnce(() => {
+            if (myGen !== this._noConnectTimerGen) return;
+            layer.destroy();
+            this._board?.shuffleAll(true);
+            this._playSfx(this._sfx?.refresh);
+        }, delay);
+    }
+
+    private _ensureAudioSource(): AudioSource | null {
+        if (this._audioSource?.isValid) return this._audioSource;
+        let a = this.node.getComponent(AudioSource);
+        if (!a) {
+            a = this.node.addComponent(AudioSource);
+            a.playOnAwake = false;
+        }
+        this._audioSource = a;
+        return a;
+    }
+
+    private _playSfx(clip: AudioClip | null | undefined) {
+        if (!clip) return;
+        const src = this._ensureAudioSource();
+        if (src) src.playOneShot(clip, 1);
     }
 
     /**

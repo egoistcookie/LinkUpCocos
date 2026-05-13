@@ -1,5 +1,6 @@
 import {
     _decorator,
+    AudioClip,
     Camera,
     Canvas,
     Color,
@@ -13,7 +14,7 @@ import {
     Widget,
     view,
 } from 'cc';
-import { GameView, type GameToolButtonSprites } from './game/GameView';
+import { GameView, type GameSfxConfig, type GameToolButtonSprites, type NoConnectDialogConfig } from './game/GameView';
 import { HomeView } from './game/HomeView';
 import { TILE_SPRITE_SLOTS } from './game/LinkUpBoard';
 import { linkDumpNode, linkLayerVsCamera, linkLog, linkWarn, nodePath } from './util/LinkUpDebug';
@@ -34,12 +35,13 @@ export class GameApp extends Component {
     gameBackground: SpriteFrame | null = null;
 
     /**
-     * 棋盘格子贴图：第 i 项对应「i+1 号」格子类型（与盘面数字一致）。
-     * 若某项配置了 SpriteFrame，该局该类型格子整格显示贴图且不显示数字；留空则显示数字。
+     * 棋盘格子贴图：第 i 项对应「i+1 号」类型。
+     * 若 32 项都配置了贴图：与原先一致，无贴图槽位不会用到。
+     * 若未满 32 种：盘面只生成已配置的类型、不显示数字；未配置的槽位不参与发牌。
      */
     @property({
         type: [SpriteFrame],
-        tooltip: `共 ${TILE_SPRITE_SLOTS} 项：索引 0→1号 … 索引 29→30号；未配置则该局显示数字`,
+        tooltip: `共 ${TILE_SPRITE_SLOTS} 项：索引 0→1号 …；未满 32 种时仅用已配贴图的类型发牌且不显示数字`,
     })
     tileFaceSprites: Array<SpriteFrame | null> = [];
 
@@ -63,6 +65,32 @@ export class GameApp extends Component {
     toolBtnEliminateNormal: SpriteFrame | null = null;
     @property(SpriteFrame)
     toolBtnEliminatePressed: SpriteFrame | null = null;
+
+    /** 连线成功消除一对时播放（可选） */
+    @property(AudioClip)
+    sfxConnect: AudioClip | null = null;
+    /** 点击「提示」 */
+    @property(AudioClip)
+    sfxHint: AudioClip | null = null;
+    /** 点击「刷新」 */
+    @property(AudioClip)
+    sfxRefresh: AudioClip | null = null;
+    /** 点击「消除」 */
+    @property(AudioClip)
+    sfxEliminate: AudioClip | null = null;
+
+    /** 场上无可连对时弹窗主文案 */
+    @property
+    noConnectDialogMessage = '场上没有可连线方块，自动刷新';
+    /** 弹窗副标题（可留空） */
+    @property
+    noConnectDialogTitle = '';
+    /** 弹窗展示多少秒后自动执行洗牌（秒） */
+    @property
+    noConnectDialogAutoDelay = 1.2;
+    /** 弹窗底板图；不配置则用深色纯色块 */
+    @property(SpriteFrame)
+    noConnectDialogPanelBg: SpriteFrame | null = null;
 
     private _home: HomeView | null = null;
     private _game: GameView | null = null;
@@ -134,6 +162,20 @@ export class GameApp extends Component {
             };
             this._game.setToolButtonSprites(toolBtns);
             this._game.setGameBackground(this.gameBackground);
+            const sfx: GameSfxConfig = {
+                connect: this.sfxConnect,
+                hint: this.sfxHint,
+                refresh: this.sfxRefresh,
+                eliminate: this.sfxEliminate,
+            };
+            this._game.setGameSfx(sfx);
+            const noConnect: NoConnectDialogConfig = {
+                message: this.noConnectDialogMessage,
+                title: this.noConnectDialogTitle,
+                autoDelay: Math.max(0.25, this.noConnectDialogAutoDelay),
+                panelBg: this.noConnectDialogPanelBg,
+            };
+            this._game.setNoConnectDialog(noConnect);
         }
         this.scheduleOnce(() => this._debugPipelineSnapshot('GameApp.start+0'), 0);
     }

@@ -1,19 +1,47 @@
-import { _decorator, Button, Color, Component, Graphics, Label, Node, Sprite, SpriteFrame, UITransform } from 'cc';
+import {
+    _decorator,
+    Button,
+    Color,
+    Component,
+    Graphics,
+    Label,
+    Node,
+    Rect,
+    Size,
+    Sprite,
+    SpriteFrame,
+    Texture2D,
+    UITransform,
+    UIOpacity,
+    Vec2,
+    Vec3,
+    easing,
+    math,
+    resources,
+    tween,
+} from 'cc';
 import { LinkUpPathFinder } from './LinkUpPathFinder';
 
 const { ccclass } = _decorator;
 
-/** 固定 14 行 × 8 列 = 112 格；14 种 × 8 张/种（每种 4 对） */
+/** 固定 14 行 × 8 列 = 112 格；最多 32 种类型（每种偶数张，总和 112，见 _buildFullLevelBag） */
 export const BOARD_ROWS = 14;
 export const BOARD_COLS = 8;
-export const TYPE_COUNT = 14;
+export const TYPE_COUNT = 32;
 /** App 上可配置的棋盘格子贴图槽位数：第 n 项对应「n 号类型」（与格子数字一致） */
-export const TILE_SPRITE_SLOTS = 30;
-const TILES_PER_TYPE = (BOARD_ROWS * BOARD_COLS) / TYPE_COUNT;
+export const TILE_SPRITE_SLOTS = 32;
 
 const COLOR_SEL = new Color(0xe9, 0xc4, 0x6a, 255);
 const COLOR_HINT = new Color(0xe9, 0xc4, 0x6a, 255);
-const COLOR_LINE = new Color(0xff, 0xd7, 0x4a, 230);
+/** 金线仅显示该时长后擦除；星星动画仍用 STAR_BURST_DURATION */
+const CONNECT_LINE_VISIBLE = 0.5;
+/** 星星散开 + 渐隐时长（与原先一致） */
+const STAR_BURST_DURATION = 0.9;
+/** 星星数量 */
+const STAR_BURST_COUNT = 15;
+const STAR_SIZE_MIN = 5;
+const STAR_SIZE_MAX = 15;
+const STAR_PATH_RES = 'icon/star';
 /** 有牌时的格子底（与棋盘底区分）；整块随节点 active 一起隐藏 */
 const COLOR_CELL_FACE = new Color(0x3a, 0x4d, 0x6e, 255);
 
@@ -29,10 +57,27 @@ export class LinkUpBoard extends Component {
     private _cellSize = { w: 64, h: 64 };
     private _hintCells: Array<{ r: number; c: number; oldLab: Color | null; oldSpr: Color | null }> = [];
     private _lineNode: Node | null = null;
+    /** 连线星星挂在独立节点，避免金线 0.5s 清除时把星星一并删掉 */
+    private _starBurstRoot: Node | null = null;
+    private _scheduledHideLine: (() => void) | null = null;
+    private _scheduledFinishLine: (() => void) | null = null;
     /** 来自 GameApp：索引 i 对应类型 id i+1 */
     private _tileFaceSprites: Array<SpriteFrame | null> = [];
+    /** `undefined` 未拉取；`null` 失败 */
+    private _starSpriteFrame: SpriteFrame | null | undefined = undefined;
+    private _starSpriteFramePromise: Promise<SpriteFrame | null> | null = null;
+    /** 连线/星星特效代数，清除或新开一局时递增，用于丢弃过期的异步加载回调 */
+    private _connectLineFxGeneration = 0;
+    /** 当前局用于发牌的类型 id 列表（有贴图的槽位）；为空表示使用 1…TYPE_COUNT 且允许数字显示 */
+    private _activeTypeIds: number[] = [];
+    /** 已配置贴图种类数 &lt; TILE_SPRITE_SLOTS：不显示数字，盘面只出现已配置类型 */
+    private _spritesOnlyMode = false;
 
     onWin: (() => void) | null = null;
+    /** 成功连线并消除一对时，由 GameView 注入以播放音效 */
+    onConnectSfx: (() => void) | null = null;
+    /** 场上无可连对时由 GameView 弹提示并刷新；未注入则直接 shuffleAll */
+    onNoConnectablePair: (() => void) | null = null;
 
     /** 由 GameApp 传入；可随时调用刷新当前棋盘显示 */
     setTileFaceSprites(frames: (SpriteFrame | null)[] | null | undefined) {
@@ -43,6 +88,20 @@ export class LinkUpBoard extends Component {
             }
         } else {
             for (let i = 0; i < TILE_SPRITE_SLOTS; i++) this._tileFaceSprites.push(null);
+        }
+        const configured: number[] = [];
+        for (let i = 0; i < TILE_SPRITE_SLOTS; i++) {
+            if (this._tileFaceSprites[i] != null) configured.push(i + 1);
+        }
+        if (configured.length === 0) {
+            this._activeTypeIds = [];
+            this._spritesOnlyMode = false;
+        } else if (configured.length < TILE_SPRITE_SLOTS) {
+            this._activeTypeIds = configured;
+            this._spritesOnlyMode = true;
+        } else {
+            this._activeTypeIds = configured;
+            this._spritesOnlyMode = true;
         }
         if (this._cells.length === BOARD_ROWS && this._cells[0]?.length === BOARD_COLS) {
             for (let r = 0; r < BOARD_ROWS; r++) {
@@ -79,8 +138,10 @@ export class LinkUpBoard extends Component {
     }
 
     private _clearBoard() {
+        this._unscheduleConnectLineFx();
         this.node.removeAllChildren();
         this._lineNode = null;
+        this._starBurstRoot = null;
         this.grid = [];
         this._cells = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
@@ -170,36 +231,260 @@ export class LinkUpBoard extends Component {
         return g;
     }
 
-    private _clearConnectLine = () => {
-        const g = this._lineNode?.getComponent(Graphics);
-        g?.clear();
-    };
+    private _ensureStarBurstRoot(): Node {
+        if (this._starBurstRoot && this._starBurstRoot.isValid) return this._starBurstRoot;
+        const n = new Node('ConnectLineStars');
+        n.setParent(this.node);
+        const ut = n.addComponent(UITransform);
+        const ui = this.node.getComponent(UITransform);
+        if (ui) ut.setContentSize(ui.width, ui.height);
+        n.setPosition(0, 0, 0);
+        this._starBurstRoot = n;
+        return n;
+    }
+
+    private _unscheduleConnectLineFx() {
+        if (this._scheduledHideLine) {
+            this.unschedule(this._scheduledHideLine);
+            this._scheduledHideLine = null;
+        }
+        if (this._scheduledFinishLine) {
+            this.unschedule(this._scheduledFinishLine);
+            this._scheduledFinishLine = null;
+        }
+    }
+
+    /** Creator 3.x：先 `路径/spriteFrame`，再整图 SpriteFrame，再 Texture2D 包一层（纯 texture 图无子资源时） */
+    private _loadResourcesSpriteFrame(basePath: string): Promise<SpriteFrame | null> {
+        return new Promise((resolve) => {
+            resources.load(`${basePath}/spriteFrame`, SpriteFrame, (err, sf) => {
+                if (!err && sf) {
+                    resolve(sf);
+                    return;
+                }
+                resources.load(basePath, SpriteFrame, (err2, sf2) => {
+                    if (!err2 && sf2) {
+                        resolve(sf2);
+                        return;
+                    }
+                    resources.load(basePath, Texture2D, (err3, tex) => {
+                        if (err3 || !tex) {
+                            resolve(null);
+                            return;
+                        }
+                        const w = tex.width;
+                        const h = tex.height;
+                        const sf3 = new SpriteFrame();
+                        sf3.texture = tex;
+                        sf3.rect = new Rect(0, 0, w, h);
+                        sf3.originalSize = new Size(w, h);
+                        sf3.offset = new Vec2(0, 0);
+                        resolve(sf3);
+                    });
+                });
+            });
+        });
+    }
+
+    private _getStarSpriteFrame(): Promise<SpriteFrame | null> {
+        if (this._starSpriteFrame !== undefined) {
+            return Promise.resolve(this._starSpriteFrame);
+        }
+        if (this._starSpriteFramePromise) return this._starSpriteFramePromise;
+        this._starSpriteFramePromise = this._loadResourcesSpriteFrame(STAR_PATH_RES).then((sf) => {
+            this._starSpriteFrame = sf ?? null;
+            return this._starSpriteFrame;
+        });
+        return this._starSpriteFramePromise;
+    }
+
+    private _pathToLocals(path: Array<{ r: number; c: number }>): Vec3[] {
+        return path.map((p) => {
+            const { x, y } = this._padToLocal(p.r, p.c);
+            return new Vec3(x, y, 0);
+        });
+    }
+
+    /** u∈[0,1] 按折线弧长插值 */
+    private _pointOnPolyline(points: Vec3[], u: number): Vec3 {
+        if (points.length === 0) return new Vec3();
+        if (points.length === 1) return points[0].clone();
+        const uu = math.clamp01(u);
+        let total = 0;
+        const lens: number[] = [];
+        for (let i = 1; i < points.length; i++) {
+            const d = Vec3.distance(points[i - 1], points[i]);
+            lens.push(d);
+            total += d;
+        }
+        if (total < 1e-4) return points[0].clone();
+        let t = uu * total;
+        for (let i = 0; i < lens.length; i++) {
+            const L = lens[i];
+            if (t <= L || i === lens.length - 1) {
+                const k = math.clamp01(L < 1e-4 ? 0 : t / L);
+                const a = points[i];
+                const b = points[i + 1];
+                return new Vec3(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, 0);
+            }
+            t -= L;
+        }
+        return points[points.length - 1].clone();
+    }
+
+    private _strokePathLayers(g: Graphics, locals: Vec3[]) {
+        if (locals.length < 2) return;
+        const strokeOnce = (width: number, color: Color) => {
+            g.lineWidth = width;
+            g.strokeColor = color;
+            g.moveTo(locals[0].x, locals[0].y);
+            for (let i = 1; i < locals.length; i++) {
+                g.lineTo(locals[i].x, locals[i].y);
+            }
+            g.stroke();
+        };
+        const anyG = g as Graphics & { lineJoin?: number; lineCap?: number };
+        if (typeof anyG.lineJoin === 'number') anyG.lineJoin = 1;
+        if (typeof anyG.lineCap === 'number') anyG.lineCap = 1;
+        strokeOnce(14, new Color(200, 130, 30, 70));
+        strokeOnce(9, new Color(255, 185, 60, 140));
+        strokeOnce(5.5, new Color(255, 220, 120, 220));
+        strokeOnce(2.8, new Color(255, 252, 230, 255));
+    }
+
+    private _spawnStarBurst(locals: Vec3[], sf: SpriteFrame) {
+        const root = this._ensureStarBurstRoot();
+        if (!root.isValid) return;
+        const nStars = STAR_BURST_COUNT;
+        const dur = STAR_BURST_DURATION;
+        for (let i = 0; i < nStars; i++) {
+            const u = math.clamp01((i + Math.random() * 0.9) / Math.max(1, nStars - 0.5));
+            const base = this._pointOnPolyline(locals, u);
+            const jitter = 10;
+            const pos = new Vec3(
+                base.x + (Math.random() - 0.5) * jitter,
+                base.y + (Math.random() - 0.5) * jitter,
+                0,
+            );
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 38 + Math.random() * 52;
+            const dest = new Vec3(pos.x + Math.cos(angle) * dist, pos.y + Math.sin(angle) * dist, 0);
+            const size = math.lerp(STAR_SIZE_MIN, STAR_SIZE_MAX, Math.random());
+
+            const starN = new Node(`StarBurst_${i}`);
+            starN.setParent(root);
+            starN.setPosition(pos);
+            const ut = starN.addComponent(UITransform);
+            ut.setAnchorPoint(0.5, 0.5);
+            ut.setContentSize(size, size);
+            const sp = starN.addComponent(Sprite);
+            sp.spriteFrame = sf;
+            sp.sizeMode = Sprite.SizeMode.CUSTOM;
+            sp.trim = false;
+            ut.setContentSize(size, size);
+            sp.color = new Color(255, 248, 210, 255);
+            const op = starN.addComponent(UIOpacity);
+            op.opacity = 255;
+
+            tween(starN)
+                .parallel(
+                    tween(starN).to(dur, { position: dest }, { easing: easing.sineOut }),
+                    tween(op).to(dur, { opacity: 0 }, { easing: easing.sineIn }),
+                )
+                .call(() => {
+                    if (starN.isValid) starN.destroy();
+                })
+                .start();
+        }
+        root.setSiblingIndex(this.node.children.length - 1);
+    }
 
     private _drawConnectLine(r1: number, c1: number, r2: number, c2: number) {
         const path = LinkUpPathFinder.findPath(this.grid, r1, c1, r2, c2);
         if (!path || path.length < 2) return;
         const g = this._ensureLineNode();
         g.clear();
-        g.lineWidth = 5;
-        g.strokeColor = COLOR_LINE;
-        const p0 = this._padToLocal(path[0].r, path[0].c);
-        g.moveTo(p0.x, p0.y);
-        for (let i = 1; i < path.length; i++) {
-            const p = this._padToLocal(path[i].r, path[i].c);
-            g.lineTo(p.x, p.y);
-        }
-        g.stroke();
+
+        this._unscheduleConnectLineFx();
+        const fxGen = ++this._connectLineFxGeneration;
+        const hideGen = fxGen;
+        this._scheduledHideLine = () => {
+            if (this._connectLineFxGeneration !== hideGen) return;
+            this._lineNode?.getComponent(Graphics)?.clear();
+        };
+        const finishGen = fxGen;
+        this._scheduledFinishLine = () => {
+            if (this._connectLineFxGeneration !== finishGen) return;
+            const sr = this._starBurstRoot;
+            if (sr?.isValid) sr.removeAllChildren();
+            this._lineNode?.getComponent(Graphics)?.clear();
+            this._scheduledHideLine = null;
+            this._scheduledFinishLine = null;
+        };
+        this.scheduleOnce(this._scheduledHideLine, CONNECT_LINE_VISIBLE);
+        this.scheduleOnce(this._scheduledFinishLine, STAR_BURST_DURATION);
+
+        const locals = this._pathToLocals(path);
+        this._strokePathLayers(g, locals);
+
         this._lineNode!.setSiblingIndex(this.node.children.length - 1);
-        this.unschedule(this._clearConnectLine);
-        this.scheduleOnce(this._clearConnectLine, 0.42);
+
+        const fxGenStar = fxGen;
+        void this._getStarSpriteFrame().then((sf) => {
+            if (fxGenStar !== this._connectLineFxGeneration || !sf || !this.node.isValid) return;
+            this._spawnStarBurst(locals, sf);
+        });
+    }
+
+    /** 新开一局：凑满棋盘；仅用 `_activeTypeIds`（非空）发牌，否则用 1…TYPE_COUNT */
+    private _buildFullLevelBag(): number[] {
+        const cellCount = BOARD_ROWS * BOARD_COLS;
+        if (this._activeTypeIds.length > 0) {
+            const counts = this._evenTileCountsPerSlot(this._activeTypeIds.length, cellCount);
+            if (!counts) return [];
+            return this._bagFromTypeCounts(this._activeTypeIds, counts);
+        }
+        const ids = Array.from({ length: TYPE_COUNT }, (_, i) => i + 1);
+        const counts = this._evenTileCountsPerSlot(TYPE_COUNT, cellCount);
+        if (!counts) return [];
+        return this._bagFromTypeCounts(ids, counts);
+    }
+
+    /**
+     * 每种至少 2 张且为偶数、总和 = cellCount。
+     * 多出来的「对子」按轮加在后 min(剩余对子, m) 种上，避免 m 较小时 extraPairs>m 出现负下标。
+     */
+    private _evenTileCountsPerSlot(m: number, cellCount: number): number[] | null {
+        const minEach = 2;
+        if (m <= 0 || cellCount < m * minEach) return null;
+        const counts = new Array(m).fill(minEach);
+        let remaining = cellCount - m * minEach;
+        if (remaining % 2 !== 0) return null;
+        let pairsLeft = remaining / 2;
+        while (pairsLeft > 0) {
+            const k = Math.min(pairsLeft, m);
+            for (let i = m - k; i < m; i++) counts[i] += 2;
+            pairsLeft -= k;
+        }
+        return counts;
+    }
+
+    private _bagFromTypeCounts(typeIds: number[], counts: number[]): number[] {
+        const bag: number[] = [];
+        for (let ti = 0; ti < typeIds.length; ti++) {
+            const id = typeIds[ti];
+            const n = counts[ti];
+            for (let j = 0; j < n; j++) bag.push(id);
+        }
+        return bag;
     }
 
     private _fillRandomSolvable() {
         const maxTry = 80;
         for (let t = 0; t < maxTry; t++) {
-            const bag: number[] = [];
-            for (let k = 1; k <= TYPE_COUNT; k++) {
-                for (let i = 0; i < TILES_PER_TYPE; i++) bag.push(k);
+            const bag = this._buildFullLevelBag();
+            if (bag.length !== BOARD_ROWS * BOARD_COLS) {
+                break;
             }
             this._shuffle(bag);
             let i = 0;
@@ -214,6 +499,18 @@ export class LinkUpBoard extends Component {
             }
         }
         this._spawnCells();
+        this.scheduleOnce(() => this._invokeNoConnectOrShuffle(), 0);
+    }
+
+    private _invokeNoConnectOrShuffle() {
+        if (!this._layoutReady() || this._isEmpty()) return;
+        if (!this.hasAnyConnectablePair()) {
+            if (this.onNoConnectablePair) {
+                this.onNoConnectablePair();
+            } else {
+                this.shuffleAll(true);
+            }
+        }
     }
 
     private _shuffle<T>(arr: T[]) {
@@ -224,8 +521,10 @@ export class LinkUpBoard extends Component {
     }
 
     private _spawnCells() {
+        this._unscheduleConnectLineFx();
         this.node.removeAllChildren();
         this._lineNode = null;
+        this._starBurstRoot = null;
         const cw = this._cellSize.w;
         const ch = this._cellSize.h;
         const originX = -((BOARD_COLS * cw) >> 1);
@@ -352,8 +651,13 @@ export class LinkUpBoard extends Component {
             }
             if (lab) {
                 lab.enabled = true;
-                lab.string = String(v);
-                lab.color = Color.WHITE;
+                if (this._spritesOnlyMode) {
+                    lab.string = '';
+                    lab.enabled = false;
+                } else {
+                    lab.string = String(v);
+                    lab.color = Color.WHITE;
+                }
             }
         }
     }
@@ -400,6 +704,7 @@ export class LinkUpBoard extends Component {
             return;
         }
         if (LinkUpPathFinder.canConnect(this.grid, r0, c0, r, c)) {
+            this.onConnectSfx?.();
             this._drawConnectLine(r0, c0, r, c);
             this.grid[r0][c0] = null;
             this.grid[r][c] = null;
@@ -428,7 +733,11 @@ export class LinkUpBoard extends Component {
             return;
         }
         if (!this.hasAnyConnectablePair()) {
-            this.shuffleAll(true);
+            if (this.onNoConnectablePair) {
+                this.onNoConnectablePair();
+            } else {
+                this.shuffleAll(true);
+            }
         }
     }
 
@@ -527,6 +836,9 @@ export class LinkUpBoard extends Component {
             }
         }
         this._applySelectionTint();
+        if (ensurePair && !this._isEmpty() && !this.hasAnyConnectablePair()) {
+            this.scheduleOnce(() => this._invokeNoConnectOrShuffle(), 0);
+        }
     }
 
     removeTwoRandomTiles() {
@@ -590,6 +902,10 @@ export class LinkUpBoard extends Component {
         const ln = this._lineNode;
         if (ln && ui) {
             ln.getComponent(UITransform)?.setContentSize(ui.width, ui.height);
+        }
+        const sr = this._starBurstRoot;
+        if (sr && ui) {
+            sr.getComponent(UITransform)?.setContentSize(ui.width, ui.height);
         }
     }
 }
