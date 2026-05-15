@@ -21,6 +21,8 @@ import {
     tween,
 } from 'cc';
 import { LinkUpPathFinder } from './LinkUpPathFinder';
+import { MIN_DECK_TYPE_COUNT } from '../util/DeckSelectionStorage';
+import { linkWarn } from '../util/LinkUpDebug';
 
 const { ccclass } = _decorator;
 
@@ -89,6 +91,54 @@ export class LinkUpBoard extends Component {
         } else {
             for (let i = 0; i < TILE_SPRITE_SLOTS; i++) this._tileFaceSprites.push(null);
         }
+        this._recomputeActiveTypeIdsFromSprites();
+        if (this._cells.length === BOARD_ROWS && this._cells[0]?.length === BOARD_COLS) {
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    this._syncCellVisual(r, c);
+                }
+            }
+            this._applySelectionTint();
+        }
+    }
+
+    /**
+     * 卡组子集：仅使用 `typeIds` 中已有贴图的类型；至少 {@link MIN_DECK_TYPE_COUNT} 种，否则回退为「全部已配置类型」。
+     * 传 `null` 或空数组表示取消卡组筛选（与当前贴图配置一致）。
+     */
+    setDeckTypeIds(typeIds: number[] | null) {
+        if (!typeIds || typeIds.length === 0) {
+            this._recomputeActiveTypeIdsFromSprites();
+        } else {
+            const allowed = new Set<number>();
+            for (let i = 0; i < TILE_SPRITE_SLOTS; i++) {
+                if (this._tileFaceSprites[i] != null) allowed.add(i + 1);
+            }
+            const filtered = [...new Set(typeIds.map((n) => Number(n)).filter((id) => allowed.has(id)))].sort(
+                (a, b) => a - b,
+            );
+            if (filtered.length < MIN_DECK_TYPE_COUNT) {
+                linkWarn('LinkUpBoard.setDeckTypeIds', '类型数不足，已回退为全部已配置类型', {
+                    got: filtered.length,
+                    min: MIN_DECK_TYPE_COUNT,
+                });
+                this._recomputeActiveTypeIdsFromSprites();
+            } else {
+                this._activeTypeIds = filtered;
+                this._spritesOnlyMode = true;
+            }
+        }
+        if (this._cells.length === BOARD_ROWS && this._cells[0]?.length === BOARD_COLS) {
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    this._syncCellVisual(r, c);
+                }
+            }
+            this._applySelectionTint();
+        }
+    }
+
+    private _recomputeActiveTypeIdsFromSprites() {
         const configured: number[] = [];
         for (let i = 0; i < TILE_SPRITE_SLOTS; i++) {
             if (this._tileFaceSprites[i] != null) configured.push(i + 1);
@@ -102,14 +152,6 @@ export class LinkUpBoard extends Component {
         } else {
             this._activeTypeIds = configured;
             this._spritesOnlyMode = true;
-        }
-        if (this._cells.length === BOARD_ROWS && this._cells[0]?.length === BOARD_COLS) {
-            for (let r = 0; r < BOARD_ROWS; r++) {
-                for (let c = 0; c < BOARD_COLS; c++) {
-                    this._syncCellVisual(r, c);
-                }
-            }
-            this._applySelectionTint();
         }
     }
 

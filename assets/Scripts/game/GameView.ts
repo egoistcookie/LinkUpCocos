@@ -134,6 +134,9 @@ export class GameView extends Component {
     private _noConnectCfg: NoConnectDialogConfig | null = null;
     private _noConnectTimerGen = 0;
 
+    /** GameApp 注入的卡组类型子集（≥30）；无贴图模式时为 null */
+    private _deckTypeIds: number[] | null = null;
+
     onBack: (() => void) | null = null;
 
     /** GameRoot 初始常为 inactive：start 在首次激活后调用，晚于同帧已执行过的 GameApp.start，可读到 App 上配置的按钮贴图 */
@@ -159,8 +162,24 @@ export class GameView extends Component {
         this._tileFaceCache = frames.length > 0 ? [...frames] : [];
         if (this._board) {
             this._board.setTileFaceSprites(this._tileFaceCache);
+            this._applyDeckToBoard();
         }
         this._wireBoardCallbacks();
+    }
+
+    /** 由 GameApp 根据本地卡组或 null（恢复为全部已配置类型）注入 */
+    setDeckTypeIds(typeIds: number[] | null) {
+        this._deckTypeIds = typeIds && typeIds.length > 0 ? [...typeIds] : null;
+        this._applyDeckToBoard();
+    }
+
+    private _applyDeckToBoard() {
+        if (!this._board) return;
+        if (this._deckTypeIds && this._deckTypeIds.length > 0) {
+            this._board.setDeckTypeIds(this._deckTypeIds);
+        } else {
+            this._board.setDeckTypeIds(null);
+        }
     }
 
     /** 顶栏返回 + 底栏提示/刷新/消除 共 8 张（普通+按下），由 GameApp 注入；留空则用 resources 默认 icon */
@@ -323,6 +342,7 @@ export class GameView extends Component {
         if (this._tileFaceCache && this._tileFaceCache.length > 0) {
             this._board.setTileFaceSprites(this._tileFaceCache);
         }
+        this._applyDeckToBoard();
         this._wireBoardCallbacks();
 
         // 子节点顺序：GameRoot 下 GameBg(若有) → BoardHolder → TopBar → BottomBar

@@ -1,24 +1,30 @@
 import {
     _decorator,
     AudioClip,
+    Button,
     Camera,
     Canvas,
     Color,
     Component,
     director,
+    Graphics,
+    Label,
     Layers,
     Node,
     Size,
+    Sprite,
     SpriteFrame,
     UITransform,
     Widget,
     view,
 } from 'cc';
 import { GameView, type GameSfxConfig, type GameToolButtonSprites, type NoConnectDialogConfig } from './game/GameView';
-import { HomeView } from './game/HomeView';
+import { HomeView, type HomeMainButtonSprites } from './game/HomeView';
+import { DeckSelectDialog } from './game/DeckSelectDialog';
 import { TILE_SPRITE_SLOTS } from './game/LinkUpBoard';
+import { getConfiguredTypeIds, loadDeckTypeIdsForGame, MIN_DECK_TYPE_COUNT } from './util/DeckSelectionStorage';
 import { linkDumpNode, linkLayerVsCamera, linkLog, linkWarn, nodePath } from './util/LinkUpDebug';
-import { getStableVisibleSize } from './util/ViewSize';
+import { getStableVisibleSize, getLayoutSizeForNode } from './util/ViewSize';
 
 type CanvasComp = Canvas & { cameraComponent: Camera | null };
 
@@ -92,6 +98,28 @@ export class GameApp extends Component {
     @property(SpriteFrame)
     noConnectDialogPanelBg: SpriteFrame | null = null;
 
+    /** 首页：开始游戏（普通 / 按下），不配置则用纯色底 + 文字 */
+    @property(SpriteFrame)
+    homeBtnStartNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    homeBtnStartPressed: SpriteFrame | null = null;
+    /** 配置卡组 */
+    @property(SpriteFrame)
+    homeBtnDeckNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    homeBtnDeckPressed: SpriteFrame | null = null;
+    /** 商店 */
+    @property(SpriteFrame)
+    homeBtnShopNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    homeBtnShopPressed: SpriteFrame | null = null;
+    /** 配置卡组弹窗底板；不配置则用与项目样式一致的深色底板 */
+    @property(SpriteFrame)
+    deckDialogPanelBg: SpriteFrame | null = null;
+    /** 商店弹窗底板（占位）；不配置则用深色底板 */
+    @property(SpriteFrame)
+    shopDialogPanelBg: SpriteFrame | null = null;
+
     private _home: HomeView | null = null;
     private _game: GameView | null = null;
 
@@ -118,6 +146,8 @@ export class GameApp extends Component {
         this._home = homeN.addComponent(HomeView);
         this._game = gameN.addComponent(GameView);
         gameN.active = false;
+
+        this._applyHomeViewInit();
 
         this._setLayerRecursive(this.node, GameApp._defaultSceneLayerMask());
 
@@ -146,10 +176,10 @@ export class GameApp extends Component {
         this._syncCanvasOrthoAndAppSize();
         this.scheduleOnce(() => this._syncCanvasOrthoAndAppSize(), 0);
         this._home?.setConfiguredBackground(this.homeBackground);
-        this._home?.init(() => this._enterGame());
         if (this._game) {
             this._game.onBack = () => this._enterHome();
             this._game.setTileFaceSprites(this.tileFaceSprites ?? []);
+            this._syncDeckToGameView();
             const toolBtns: GameToolButtonSprites = {
                 backNormal: this.toolBtnBackNormal,
                 backPressed: this.toolBtnBackPressed,
@@ -205,6 +235,167 @@ export class GameApp extends Component {
         if (st && cam) {
             linkLayerVsCamera('GameApp.debug.Start-vs-UICamera', st, cam);
         }
+    }
+
+    private _applyHomeViewInit() {
+        if (!this._home) return;
+        const sprites: HomeMainButtonSprites = {
+            startNormal: this.homeBtnStartNormal,
+            startPressed: this.homeBtnStartPressed,
+            deckNormal: this.homeBtnDeckNormal,
+            deckPressed: this.homeBtnDeckPressed,
+            shopNormal: this.homeBtnShopNormal,
+            shopPressed: this.homeBtnShopPressed,
+        };
+        this._home.init({
+            sprites,
+            onStart: () => this._onHomeStartGame(),
+            onDeck: () => this._openDeckDialog(),
+            onShop: () => this._openShopDialog(),
+        });
+    }
+
+    private _syncDeckToGameView() {
+        const faces = this.tileFaceSprites ?? [];
+        const configured = getConfiguredTypeIds(faces);
+        if (configured.length >= MIN_DECK_TYPE_COUNT) {
+            const ids = loadDeckTypeIdsForGame(faces);
+            if (ids && ids.length >= MIN_DECK_TYPE_COUNT) this._game?.setDeckTypeIds(ids);
+            else this._game?.setDeckTypeIds(null);
+        } else {
+            this._game?.setDeckTypeIds(null);
+        }
+    }
+
+    private _onHomeStartGame() {
+        const faces = this.tileFaceSprites ?? [];
+        const configured = getConfiguredTypeIds(faces);
+        if (configured.length >= MIN_DECK_TYPE_COUNT) {
+            const ids = loadDeckTypeIdsForGame(faces);
+            if (!ids || ids.length < MIN_DECK_TYPE_COUNT) {
+                this._home?.showToast(
+                    `请先在「配置卡组」中选择至少 ${MIN_DECK_TYPE_COUNT} 种方块后再开始游戏。`,
+                );
+                return;
+            }
+            this._game?.setDeckTypeIds(ids);
+        } else if (configured.length > 0) {
+            this._home?.showToast(
+                `使用方块贴图时，请至少在 GameApp 中配置 ${MIN_DECK_TYPE_COUNT} 种格子贴图；当前仅 ${configured.length} 种。配置满 ${MIN_DECK_TYPE_COUNT} 种后，还需在「配置卡组」中勾选至少 ${MIN_DECK_TYPE_COUNT} 种。`,
+            );
+            return;
+        } else {
+            this._game?.setDeckTypeIds(null);
+        }
+        this._enterGame();
+    }
+
+    private _openDeckDialog() {
+        const hr = this._home?.node;
+        if (!hr) return;
+        DeckSelectDialog.open(hr, {
+            tileFaces: this.tileFaceSprites ?? [],
+            panelBg: this.deckDialogPanelBg,
+            onSaved: (ids) => this._game?.setDeckTypeIds(ids),
+        });
+    }
+
+    private _openShopDialog() {
+        const hr = this._home?.node;
+        if (!hr) return;
+        if (hr.getChildByName('ShopModal')) return;
+
+        const vs = getLayoutSizeForNode(hr);
+        const root = new Node('ShopModal');
+        root.setParent(hr);
+        root.setSiblingIndex(hr.children.length - 1);
+        const rw = root.addComponent(UITransform);
+        rw.setContentSize(vs.width, vs.height);
+        const wg = root.addComponent(Widget);
+        wg.isAlignTop = wg.isAlignBottom = wg.isAlignLeft = wg.isAlignRight = true;
+        wg.top = wg.bottom = wg.left = wg.right = 0;
+        wg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        wg.updateAlignment();
+
+        const dim = new Node('Dim');
+        dim.setParent(root);
+        dim.addComponent(UITransform).setContentSize(vs.width, vs.height);
+        const dW = dim.addComponent(Widget);
+        dW.isAlignTop = dW.isAlignBottom = dW.isAlignLeft = dW.isAlignRight = true;
+        dW.top = dW.bottom = dW.left = dW.right = 0;
+        dW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        dW.updateAlignment();
+        const dg = dim.addComponent(Graphics);
+        dg.fillColor = new Color(0, 0, 0, 160);
+        dg.fillRect(-vs.width / 2, -vs.height / 2, vs.width, vs.height);
+        const dimBtn = dim.addComponent(Button);
+        dimBtn.transition = Button.Transition.NONE;
+        dim.on(Button.EventType.CLICK, () => root.destroy(), this);
+
+        const panelW = Math.min(440, vs.width - 40);
+        const panelH = 220;
+        const panel = new Node('Panel');
+        panel.setParent(root);
+        panel.addComponent(UITransform).setContentSize(panelW, panelH);
+        const pWg = panel.addComponent(Widget);
+        pWg.isAlignHorizontalCenter = true;
+        pWg.isAlignVerticalCenter = true;
+        pWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        pWg.updateAlignment();
+
+        if (!this.shopDialogPanelBg) {
+            const pg = panel.addComponent(Graphics);
+            pg.fillColor = new Color(0x1b, 0x26, 0x3b, 245);
+            pg.fillRect(-panelW / 2, -panelH / 2, panelW, panelH);
+        } else {
+            const sp = panel.addComponent(Sprite);
+            sp.spriteFrame = this.shopDialogPanelBg;
+            sp.sizeMode = Sprite.SizeMode.CUSTOM;
+            sp.color = Color.WHITE;
+        }
+
+        const titleN = new Node('Title');
+        titleN.setParent(panel);
+        titleN.setPosition(0, panelH / 2 - 40, 0);
+        titleN.addComponent(UITransform).setContentSize(panelW - 24, 36);
+        const tl = titleN.addComponent(Label);
+        tl.string = '商店';
+        tl.fontSize = 26;
+        tl.color = new Color(0xe9, 0xc4, 0x6a, 255);
+        tl.horizontalAlign = Label.HorizontalAlign.CENTER;
+        tl.verticalAlign = Label.VerticalAlign.CENTER;
+
+        const msgN = new Node('Msg');
+        msgN.setParent(panel);
+        msgN.setPosition(0, -8, 0);
+        msgN.addComponent(UITransform).setContentSize(panelW - 40, 80);
+        const ml = msgN.addComponent(Label);
+        ml.string = '商店功能即将开放，敬请期待。';
+        ml.fontSize = 22;
+        ml.color = Color.WHITE;
+        ml.horizontalAlign = Label.HorizontalAlign.CENTER;
+        ml.verticalAlign = Label.VerticalAlign.CENTER;
+        ml.overflow = Label.Overflow.RESIZE_HEIGHT;
+
+        const closeN = new Node('Close');
+        closeN.setParent(panel);
+        closeN.setPosition(0, -panelH / 2 + 44, 0);
+        closeN.addComponent(UITransform).setContentSize(160, 48);
+        const cg = closeN.addComponent(Graphics);
+        cg.fillColor = new Color(0x2d, 0x6a, 0x4f, 255);
+        cg.fillRect(-80, -24, 160, 48);
+        const cbtn = closeN.addComponent(Button);
+        cbtn.transition = Button.Transition.NONE;
+        const clN = new Node('Label');
+        clN.setParent(closeN);
+        clN.addComponent(UITransform).setContentSize(160, 48);
+        const cl = clN.addComponent(Label);
+        cl.string = '关闭';
+        cl.fontSize = 22;
+        cl.color = Color.WHITE;
+        cl.horizontalAlign = Label.HorizontalAlign.CENTER;
+        cl.verticalAlign = Label.VerticalAlign.CENTER;
+        closeN.on(Button.EventType.CLICK, () => root.destroy(), this);
     }
 
     private _enterGame() {
