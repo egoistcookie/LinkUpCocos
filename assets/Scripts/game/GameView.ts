@@ -16,6 +16,7 @@ import {
 } from 'cc';
 import { LinkUpBoard } from './LinkUpBoard';
 import { getStableVisibleSize } from '../util/ViewSize';
+import { consumeProp, type PropKind } from '../util/PlayerResourceStorage';
 
 const { ccclass } = _decorator;
 
@@ -29,6 +30,12 @@ export type GameToolButtonSprites = {
     refreshPressed: SpriteFrame | null;
     eliminateNormal: SpriteFrame | null;
     eliminatePressed: SpriteFrame | null;
+};
+
+/** 通关金币奖励弹窗（由 GameApp 配置） */
+export type CoinRewardDialogConfig = {
+    panelBg: SpriteFrame | null;
+    coinIcon: SpriteFrame | null;
 };
 
 /** 无可连对时的提示（由 GameApp 配置） */
@@ -126,6 +133,8 @@ export class GameView extends Component {
     private _toolBtnSprites: Partial<GameToolButtonSprites> | null = null;
     /** 若「开始游戏」早于异步 _buildUi 建完棋盘，则在此补开局 */
     private _pendingStartLevel: number | null = null;
+    /** 防止重复 schedule / pending 导致连续两次 buildLevel 打断发牌 */
+    private _buildLevelGen = 0;
     /** GameApp 注入的全屏游戏页背景；未配置则不建 GameBg */
     private _gameBackground: SpriteFrame | null = null;
     private _gameBgNode: Node | null = null;
@@ -133,15 +142,36 @@ export class GameView extends Component {
     private _audioSource: AudioSource | null = null;
     private _noConnectCfg: NoConnectDialogConfig | null = null;
     private _noConnectTimerGen = 0;
+    private _coinRewardCfg: CoinRewardDialogConfig | null = null;
 
     /** GameApp 注入的卡组类型子集（≥30）；无贴图模式时为 null */
     private _deckTypeIds: number[] | null = null;
+    /** 是否启用商店道具库存（购买后消耗） */
+    private _shopPropsEnabled = false;
 
     onBack: (() => void) | null = null;
+    /** 关卡通关：参数为本关连线次数（由 GameApp 结算并弹窗） */
+    onLevelWin: ((connectCount: number) => void) | null = null;
 
     /** GameRoot 初始常为 inactive：start 在首次激活后调用，晚于同帧已执行过的 GameApp.start，可读到 App 上配置的按钮贴图 */
     start() {
         void this._buildUi();
+    }
+
+    getLevel(): number {
+        return this._level;
+    }
+
+    /** 本关尚未结算的连线次数（用于退出游戏时静默结算） */
+    getPendingConnectCoins(): number {
+        return this._board?.getLevelConnectCount() ?? 0;
+    }
+
+    /** 取出并清零本关连线计数，避免重复结算 */
+    takePendingConnectCoins(): number {
+        const c = this._board?.getLevelConnectCount() ?? 0;
+        this._board?.resetLevelConnectCount();
+        return c;
     }
 
     beginOrRestartLevel(level: number) {
@@ -151,10 +181,21 @@ export class GameView extends Component {
             this._pendingStartLevel = level;
             return;
         }
+        this._buildLevelGen++;
+        const gen = this._buildLevelGen;
         this.scheduleOnce(() => {
-            this._board?.buildLevel();
-            this._board?.resizeToParent();
+            if (gen !== this._buildLevelGen || !this._board) return;
+            this._runBuildLevel(this._board);
         }, 0);
+    }
+
+    private _runBuildLevel(board: LinkUpBoard) {
+        const prevOnDeal = board.onDealComplete;
+        board.onDealComplete = () => {
+            board.resizeToParent();
+            prevOnDeal?.();
+        };
+        board.buildLevel();
     }
 
     /** 棋盘格子贴图（与 TILE_SPRITE_SLOTS 一致，由 GameApp 注入） */
@@ -171,6 +212,10 @@ export class GameView extends Component {
     setDeckTypeIds(typeIds: number[] | null) {
         this._deckTypeIds = typeIds && typeIds.length > 0 ? [...typeIds] : null;
         this._applyDeckToBoard();
+    }
+
+    setShopPropsEnabled(enabled: boolean) {
+        this._shopPropsEnabled = enabled;
     }
 
     private _applyDeckToBoard() {
@@ -216,6 +261,147 @@ export class GameView extends Component {
         this._wireBoardCallbacks();
     }
 
+    /** 通关金币奖励弹窗样式，由 GameApp 注入 */
+    setCoinRewardDialog(cfg: CoinRewardDialogConfig | null) {
+        this._coinRewardCfg = cfg ? { ...cfg } : null;
+    }
+
+    /** 通关奖励提示（点击继续后执行 onContinue） */
+    openCoinRewardOverlay(coinAmount: number, onContinue: () => void) {
+        const cfg = this._coinRewardCfg;
+        const root = this.node;
+        const prev = root.getChildByName('CoinRewardOverlay');
+        prev?.destroy();
+
+        const { w, h } = gameRootFullSize(root);
+        const layer = new Node('CoinRewardOverlay');
+        layer.setParent(root);
+        layer.setSiblingIndex(root.children.length - 1);
+        const layerUt = layer.addComponent(UITransform);
+        layerUt.setContentSize(w, h);
+        const layerWg = layer.addComponent(Widget);
+        layerWg.isAlignTop = layerWg.isAlignBottom = layerWg.isAlignLeft = layerWg.isAlignRight = true;
+        layerWg.top = layerWg.bottom = layerWg.left = layerWg.right = 0;
+        layerWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        layerWg.updateAlignment();
+
+        const dim = new Node('Dim');
+        dim.setParent(layer);
+        dim.addComponent(UITransform).setContentSize(w, h);
+        const dimWg = dim.addComponent(Widget);
+        dimWg.isAlignTop = dimWg.isAlignBottom = dimWg.isAlignLeft = dimWg.isAlignRight = true;
+        dimWg.top = dimWg.bottom = dimWg.left = dimWg.right = 0;
+        dimWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        dimWg.updateAlignment();
+        const dimG = dim.addComponent(Graphics);
+        dimG.fillColor = new Color(0, 0, 0, 160);
+        dimG.fillRect(-w / 2, -h / 2, w, h);
+
+        const panelW = Math.min(480, w - 48);
+        const panelH = 200;
+        const panel = new Node('Panel');
+        panel.setParent(layer);
+        panel.addComponent(UITransform).setContentSize(panelW, panelH);
+        const pWg = panel.addComponent(Widget);
+        pWg.isAlignHorizontalCenter = true;
+        pWg.isAlignVerticalCenter = true;
+        pWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        pWg.updateAlignment();
+
+        if (cfg?.panelBg) {
+            const sp = panel.addComponent(Sprite);
+            sp.spriteFrame = cfg.panelBg;
+            sp.sizeMode = Sprite.SizeMode.CUSTOM;
+            sp.color = Color.WHITE;
+        } else {
+            const pg = panel.addComponent(Graphics);
+            pg.fillColor = new Color(0x12, 0x1e, 0x2e, 245);
+            pg.fillRect(-panelW / 2, -panelH / 2, panelW, panelH);
+        }
+
+        const titleN = new Node('Title');
+        titleN.setParent(panel);
+        titleN.setPosition(0, 52, 0);
+        titleN.addComponent(UITransform).setContentSize(panelW - 32, 36);
+        const tl = titleN.addComponent(Label);
+        tl.string = '通关奖励';
+        tl.fontSize = 26;
+        tl.color = new Color(0xe9, 0xc4, 0x6a, 255);
+        tl.horizontalAlign = Label.HorizontalAlign.CENTER;
+        tl.verticalAlign = Label.VerticalAlign.CENTER;
+        this._applyLabelOutline(tl);
+
+        const rowY = 4;
+        if (cfg?.coinIcon) {
+            const iconN = new Node('CoinIcon');
+            iconN.setParent(panel);
+            iconN.setPosition(-56, rowY, 0);
+            const r = cfg.coinIcon.rect;
+            const uw = Math.max(1, r.width);
+            const uh = Math.max(1, r.height);
+            iconN.addComponent(UITransform).setContentSize(uw, uh);
+            const isp = iconN.addComponent(Sprite);
+            isp.spriteFrame = cfg.coinIcon;
+            isp.sizeMode = Sprite.SizeMode.TRIMMED;
+            const s = Math.min(40 / uw, 40 / uh);
+            iconN.setScale(s, s, 1);
+        }
+
+        const amtN = new Node('Amount');
+        amtN.setParent(panel);
+        amtN.setPosition(cfg?.coinIcon ? 12 : 0, rowY, 0);
+        amtN.addComponent(UITransform).setContentSize(panelW - 48, 44);
+        const al = amtN.addComponent(Label);
+        al.string = `+${coinAmount} 金币`;
+        al.fontSize = 28;
+        al.color = new Color(0xe9, 0xc4, 0x6a, 255);
+        al.horizontalAlign = Label.HorizontalAlign.CENTER;
+        al.verticalAlign = Label.VerticalAlign.CENTER;
+        this._applyLabelOutline(al);
+
+        const subN = new Node('Sub');
+        subN.setParent(panel);
+        subN.setPosition(0, -36, 0);
+        subN.addComponent(UITransform).setContentSize(panelW - 40, 28);
+        const sl = subN.addComponent(Label);
+        sl.string = `本关连线 ${coinAmount} 次`;
+        sl.fontSize = 18;
+        sl.color = new Color(0xe0, 0xe1, 0xdd, 255);
+        sl.horizontalAlign = Label.HorizontalAlign.CENTER;
+        sl.verticalAlign = Label.VerticalAlign.CENTER;
+
+        const btnN = new Node('Continue');
+        btnN.setParent(panel);
+        btnN.setPosition(0, -72, 0);
+        btnN.addComponent(UITransform).setContentSize(160, 44);
+        const bg = btnN.addComponent(Graphics);
+        bg.fillColor = new Color(0x2d, 0x6a, 0x4f, 255);
+        bg.fillRect(-80, -22, 160, 44);
+        const btn = btnN.addComponent(Button);
+        btn.transition = Button.Transition.NONE;
+        const blN = new Node('Label');
+        blN.setParent(btnN);
+        blN.addComponent(UITransform).setContentSize(160, 44);
+        const bl = blN.addComponent(Label);
+        bl.string = '继续';
+        bl.fontSize = 22;
+        bl.color = Color.WHITE;
+        bl.horizontalAlign = Label.HorizontalAlign.CENTER;
+        bl.verticalAlign = Label.VerticalAlign.CENTER;
+
+        const close = () => {
+            if (layer.isValid) layer.destroy();
+            onContinue();
+        };
+        btnN.on(Button.EventType.CLICK, close, this);
+    }
+
+    private _applyLabelOutline(lab: Label) {
+        lab.enableOutline = true;
+        lab.outlineColor = Color.BLACK;
+        lab.outlineWidth = 2;
+    }
+
     /** Canvas 尺寸变化时：BoardHolder 与全屏 GameBg */
     relayout() {
         const holder = this.node.getChildByName('BoardHolder');
@@ -241,7 +427,9 @@ export class GameView extends Component {
             const sp = bg.getComponent(Sprite);
             if (sp) sp.sizeMode = Sprite.SizeMode.CUSTOM;
         }
-        this._board?.resizeToParent();
+        if (this._board && !this._board.isDealing()) {
+            this._board.resizeToParent();
+        }
     }
 
     private async _buildUi() {
@@ -336,8 +524,9 @@ export class GameView extends Component {
         bUt.setContentSize(lay.w, lay.h);
 
         this._board = boardNode.addComponent(LinkUpBoard);
-        this._board.onWin = () => {
-            this.beginOrRestartLevel(this._level + 1);
+        this._board.onWin = (connectCount) => {
+            this._board?.resetLevelConnectCount();
+            this.onLevelWin?.(connectCount);
         };
         if (this._tileFaceCache && this._tileFaceCache.length > 0) {
             this._board.setTileFaceSprites(this._tileFaceCache);
@@ -429,14 +618,17 @@ export class GameView extends Component {
         };
 
         mkTool('Hint', -220, sfHint, sfHint1, () => {
+            if (!this._tryUseProp('hint')) return;
             this._playSfx(this._sfx?.hint);
             this._board?.showHint();
         });
         mkTool('Refresh', 0, sfRefresh, sfRefresh1, () => {
+            if (!this._tryUseProp('refresh')) return;
             this._playSfx(this._sfx?.refresh);
             this._board?.shuffleAll(true);
         });
         mkTool('Eliminate', 220, sfElim, sfElim1, () => {
+            if (!this._tryUseProp('eliminate')) return;
             this._playSfx(this._sfx?.eliminate);
             this._board?.removeTwoRandomTiles();
         });
@@ -446,13 +638,52 @@ export class GameView extends Component {
             this._pendingStartLevel = null;
             this._level = lv;
             if (this._levelLabel) this._levelLabel.string = `第 ${lv} 关`;
-            this._board.buildLevel();
-            this.scheduleOnce(() => this._board?.resizeToParent(), 0);
+            this._buildLevelGen++;
+            if (this._board) this._runBuildLevel(this._board);
         }
 
         if (this._gameBgNode) {
             this.scheduleOnce(() => this.relayout(), 0);
         }
+    }
+
+    private _tryUseProp(kind: PropKind): boolean {
+        if (!this._shopPropsEnabled) return true;
+        if (consumeProp(kind)) return true;
+        const names = { hint: '提示', refresh: '刷新', eliminate: '消除' };
+        this._showGameToast(`无${names[kind]}道具，请前往商店购买（50 金币）`);
+        return false;
+    }
+
+    private _showGameToast(message: string) {
+        const root = this.node;
+        const old = root.getChildByName('GameToast');
+        if (old?.isValid) old.destroy();
+        const t = new Node('GameToast');
+        t.setParent(root);
+        t.setSiblingIndex(root.children.length - 1);
+        const tw = Math.min(520, getStableVisibleSize().width - 48);
+        t.addComponent(UITransform).setContentSize(tw, 100);
+        const w = t.addComponent(Widget);
+        w.isAlignTop = true;
+        w.isAlignHorizontalCenter = true;
+        w.top = 100;
+        w.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        w.updateAlignment();
+        addCenterFillRect(t, tw, 88, new Color(0x0d, 0x1b, 0x2a, 230));
+        const labN = new Node('Msg');
+        labN.setParent(t);
+        labN.addComponent(UITransform).setContentSize(tw - 24, 72);
+        const lab = labN.addComponent(Label);
+        lab.string = message;
+        lab.fontSize = 20;
+        lab.color = Color.WHITE;
+        lab.horizontalAlign = Label.HorizontalAlign.CENTER;
+        lab.verticalAlign = Label.VerticalAlign.CENTER;
+        lab.overflow = Label.Overflow.RESIZE_HEIGHT;
+        this.scheduleOnce(() => {
+            if (t.isValid) t.destroy();
+        }, 2);
     }
 
     private _wireBoardCallbacks() {

@@ -1,30 +1,49 @@
 import {
     _decorator,
     AudioClip,
-    Button,
     Camera,
     Canvas,
     Color,
     Component,
     director,
-    Graphics,
-    Label,
     Layers,
     Node,
     Size,
-    Sprite,
     SpriteFrame,
     UITransform,
     Widget,
     view,
 } from 'cc';
-import { GameView, type GameSfxConfig, type GameToolButtonSprites, type NoConnectDialogConfig } from './game/GameView';
+import {
+    GameView,
+    type CoinRewardDialogConfig,
+    type GameSfxConfig,
+    type GameToolButtonSprites,
+    type NoConnectDialogConfig,
+} from './game/GameView';
 import { HomeView, type HomeMainButtonSprites } from './game/HomeView';
 import { DeckSelectDialog } from './game/DeckSelectDialog';
+import { ShopDialog } from './game/ShopDialog';
 import { TILE_SPRITE_SLOTS } from './game/LinkUpBoard';
-import { getConfiguredTypeIds, loadDeckTypeIdsForGame, MIN_DECK_TYPE_COUNT } from './util/DeckSelectionStorage';
+import {
+    getConfiguredTypeIds,
+    getPurchasedDeckEntries,
+    loadDeckShopKeysRaw,
+    loadDeckTypeIdsForGame,
+    MAX_DECK_TYPE_COUNT,
+    MIN_DECK_TYPE_COUNT,
+} from './util/DeckSelectionStorage';
+import { addCoins, ensureDefaultShopOwnership, loadCoins } from './util/PlayerResourceStorage';
+import {
+    buildShopCatalog,
+    buildTileFacesFromDeckKeys,
+    getDefaultOwnedShopKeys,
+    hasShopCatalog,
+    type ShopCatalogGroup,
+} from './util/ShopCatalog';
+import { type DialogActionButtonSprites } from './util/DialogActionButtons';
 import { linkDumpNode, linkLayerVsCamera, linkLog, linkWarn, nodePath } from './util/LinkUpDebug';
-import { getStableVisibleSize, getLayoutSizeForNode } from './util/ViewSize';
+import { getStableVisibleSize } from './util/ViewSize';
 
 type CanvasComp = Canvas & { cameraComponent: Camera | null };
 
@@ -47,7 +66,7 @@ export class GameApp extends Component {
      */
     @property({
         type: [SpriteFrame],
-        tooltip: `共 ${TILE_SPRITE_SLOTS} 项：索引 0→1号 …；未满 32 种时仅用已配贴图的类型发牌且不显示数字`,
+        tooltip: `共 ${TILE_SPRITE_SLOTS} 项：索引 0→1号 …；卡组模式由商店配置映射到槽位`,
     })
     tileFaceSprites: Array<SpriteFrame | null> = [];
 
@@ -116,12 +135,58 @@ export class GameApp extends Component {
     /** 配置卡组弹窗底板；不配置则用与项目样式一致的深色底板 */
     @property(SpriteFrame)
     deckDialogPanelBg: SpriteFrame | null = null;
-    /** 商店弹窗底板（占位）；不配置则用深色底板 */
+    /** 商店弹窗底板；不配置则用深色底板 */
     @property(SpriteFrame)
     shopDialogPanelBg: SpriteFrame | null = null;
 
+    /** 弹窗「确定」按钮（普通 / 按下） */
+    @property(SpriteFrame)
+    dialogBtnOkNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    dialogBtnOkPressed: SpriteFrame | null = null;
+    /** 弹窗「取消」按钮 */
+    @property(SpriteFrame)
+    dialogBtnCancelNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    dialogBtnCancelPressed: SpriteFrame | null = null;
+    /** 弹窗「关闭」按钮（商店底栏等） */
+    @property(SpriteFrame)
+    dialogBtnCloseNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    dialogBtnClosePressed: SpriteFrame | null = null;
+
+    /** 金币图标（首页与商店内展示） */
+    @property(SpriteFrame)
+    coinIcon: SpriteFrame | null = null;
+
+    /** 商店：陆地动物方块（配置多少种展示多少种，每种 10 金币） */
+    @property({ type: [SpriteFrame], tooltip: '陆地动物方块贴图列表' })
+    shopLandAnimalSprites: SpriteFrame[] = [];
+
+    /** 商店：水生动物方块 */
+    @property({ type: [SpriteFrame], tooltip: '水生动物方块贴图列表' })
+    shopAquaticAnimalSprites: SpriteFrame[] = [];
+
+    /** 商店：水果方块 */
+    @property({ type: [SpriteFrame], tooltip: '水果方块贴图列表' })
+    shopFruitSprites: SpriteFrame[] = [];
+
+    /** 商店：零食方块 */
+    @property({ type: [SpriteFrame], tooltip: '零食方块贴图列表' })
+    shopSnackSprites: SpriteFrame[] = [];
+
+    /** 商店：蔬菜方块 */
+    @property({ type: [SpriteFrame], tooltip: '蔬菜方块贴图列表' })
+    shopVegetableSprites: SpriteFrame[] = [];
+
+    /** 商店：面点方块 */
+    @property({ type: [SpriteFrame], tooltip: '面点方块贴图列表' })
+    shopPastrySprites: SpriteFrame[] = [];
+
     private _home: HomeView | null = null;
     private _game: GameView | null = null;
+    private _shopEnabled = false;
+    private _shopGroups: ShopCatalogGroup[] = [];
 
     onLoad() {
         linkLog('GameApp.onLoad', 'begin', { node: nodePath(this.node), active: this.node.active });
@@ -148,6 +213,7 @@ export class GameApp extends Component {
         gameN.active = false;
 
         this._applyHomeViewInit();
+        this._rebuildShopCatalog();
 
         this._setLayerRecursive(this.node, GameApp._defaultSceneLayerMask());
 
@@ -177,8 +243,10 @@ export class GameApp extends Component {
         this.scheduleOnce(() => this._syncCanvasOrthoAndAppSize(), 0);
         this._home?.setConfiguredBackground(this.homeBackground);
         if (this._game) {
-            this._game.onBack = () => this._enterHome();
-            this._game.setTileFaceSprites(this.tileFaceSprites ?? []);
+            this._game.onBack = () => this._onGameBack();
+            this._game.onLevelWin = (count) => this._onLevelWin(count);
+            this._game.setShopPropsEnabled(this._shopEnabled);
+            this._game.setTileFaceSprites(this._getTileFacesForGame());
             this._syncDeckToGameView();
             const toolBtns: GameToolButtonSprites = {
                 backNormal: this.toolBtnBackNormal,
@@ -206,8 +274,79 @@ export class GameApp extends Component {
                 panelBg: this.noConnectDialogPanelBg,
             };
             this._game.setNoConnectDialog(noConnect);
+            const coinReward: CoinRewardDialogConfig = {
+                panelBg: this.noConnectDialogPanelBg,
+                coinIcon: this.coinIcon,
+            };
+            this._game.setCoinRewardDialog(coinReward);
         }
+        this._refreshHomeCoins();
         this.scheduleOnce(() => this._debugPipelineSnapshot('GameApp.start+0'), 0);
+    }
+
+    private _rebuildShopCatalog() {
+        const catalog = buildShopCatalog({
+            tileFaces: this.tileFaceSprites ?? [],
+            landAnimals: this.shopLandAnimalSprites ?? [],
+            aquaticAnimals: this.shopAquaticAnimalSprites ?? [],
+            fruits: this.shopFruitSprites ?? [],
+            snacks: this.shopSnackSprites ?? [],
+            vegetables: this.shopVegetableSprites ?? [],
+            pastries: this.shopPastrySprites ?? [],
+        });
+        this._shopGroups = catalog.groups;
+        this._shopEnabled = hasShopCatalog(this._shopGroups);
+        if (this._shopEnabled) {
+            ensureDefaultShopOwnership(getDefaultOwnedShopKeys(this._shopGroups));
+        }
+    }
+
+    private _getDialogActionButtons(): DialogActionButtonSprites {
+        return {
+            okNormal: this.dialogBtnOkNormal,
+            okPressed: this.dialogBtnOkPressed,
+            cancelNormal: this.dialogBtnCancelNormal,
+            cancelPressed: this.dialogBtnCancelPressed,
+            closeNormal: this.dialogBtnCloseNormal,
+            closePressed: this.dialogBtnClosePressed,
+        };
+    }
+
+    private _getTileFacesForGame(): Array<SpriteFrame | null> {
+        if (this._shopEnabled) {
+            const keys = loadDeckShopKeysRaw(this._shopGroups);
+            if (keys.length >= MIN_DECK_TYPE_COUNT) {
+                return buildTileFacesFromDeckKeys(this._shopGroups, keys);
+            }
+        }
+        return this.tileFaceSprites ?? [];
+    }
+
+    private _refreshHomeCoins() {
+        this._home?.setCoinDisplay(loadCoins(), this.coinIcon);
+    }
+
+    /** 退出游戏：静默结算本关未发放的金币（无弹窗） */
+    private _onGameBack() {
+        const pending = this._game?.takePendingConnectCoins() ?? 0;
+        if (pending > 0) {
+            addCoins(pending);
+        }
+        this._enterHome();
+    }
+
+    /** 关卡通关：结算金币并弹出奖励提示，确认后进入下一关 */
+    private _onLevelWin(connectCount: number) {
+        const level = this._game?.getLevel() ?? 1;
+        if (connectCount > 0) {
+            addCoins(connectCount);
+            this._refreshHomeCoins();
+            this._game?.openCoinRewardOverlay(connectCount, () => {
+                this._game?.beginOrRestartLevel(level + 1);
+            });
+        } else {
+            this._game?.beginOrRestartLevel(level + 1);
+        }
     }
 
     /** 首帧后打一次：摄像机、App、开始按钮、layer 与 visibility */
@@ -256,36 +395,54 @@ export class GameApp extends Component {
     }
 
     private _syncDeckToGameView() {
-        const faces = this.tileFaceSprites ?? [];
-        const configured = getConfiguredTypeIds(faces);
-        if (configured.length >= MIN_DECK_TYPE_COUNT) {
-            const ids = loadDeckTypeIdsForGame(faces);
-            if (ids && ids.length >= MIN_DECK_TYPE_COUNT) this._game?.setDeckTypeIds(ids);
-            else this._game?.setDeckTypeIds(null);
+        const faces = this._getTileFacesForGame();
+        const ids = loadDeckTypeIdsForGame(faces, this._shopEnabled, this._shopGroups);
+        if (ids && ids.length >= MIN_DECK_TYPE_COUNT) {
+            this._game?.setDeckTypeIds(ids);
+            if (this._shopEnabled) this._game?.setTileFaceSprites(faces);
         } else {
             this._game?.setDeckTypeIds(null);
         }
     }
 
     private _onHomeStartGame() {
-        const faces = this.tileFaceSprites ?? [];
-        const configured = getConfiguredTypeIds(faces);
-        if (configured.length >= MIN_DECK_TYPE_COUNT) {
-            const ids = loadDeckTypeIdsForGame(faces);
-            if (!ids || ids.length < MIN_DECK_TYPE_COUNT) {
+        const faces = this._getTileFacesForGame();
+        if (this._shopEnabled) {
+            const owned = getPurchasedDeckEntries(this._shopGroups).length;
+            if (owned < MIN_DECK_TYPE_COUNT) {
                 this._home?.showToast(
-                    `请先在「配置卡组」中选择至少 ${MIN_DECK_TYPE_COUNT} 种方块后再开始游戏。`,
+                    `请先在「商店」获得至少 ${MIN_DECK_TYPE_COUNT} 种方块，并在「配置卡组」中勾选 ${MIN_DECK_TYPE_COUNT}～${MAX_DECK_TYPE_COUNT} 种后再开始。`,
                 );
                 return;
             }
+            const ids = loadDeckTypeIdsForGame(faces, true, this._shopGroups);
+            if (!ids) {
+                this._home?.showToast(
+                    `请先在「配置卡组」中选择 ${MIN_DECK_TYPE_COUNT}～${MAX_DECK_TYPE_COUNT} 种方块后再开始游戏。`,
+                );
+                return;
+            }
+            this._game?.setTileFaceSprites(buildTileFacesFromDeckKeys(this._shopGroups, loadDeckShopKeysRaw(this._shopGroups)));
             this._game?.setDeckTypeIds(ids);
-        } else if (configured.length > 0) {
-            this._home?.showToast(
-                `使用方块贴图时，请至少在 GameApp 中配置 ${MIN_DECK_TYPE_COUNT} 种格子贴图；当前仅 ${configured.length} 种。配置满 ${MIN_DECK_TYPE_COUNT} 种后，还需在「配置卡组」中勾选至少 ${MIN_DECK_TYPE_COUNT} 种。`,
-            );
-            return;
         } else {
-            this._game?.setDeckTypeIds(null);
+            const configured = getConfiguredTypeIds(faces);
+            if (configured.length >= MIN_DECK_TYPE_COUNT) {
+                const ids = loadDeckTypeIdsForGame(faces, false);
+                if (!ids) {
+                    this._home?.showToast(
+                        `请先在「配置卡组」中选择 ${MIN_DECK_TYPE_COUNT}～${MAX_DECK_TYPE_COUNT} 种方块后再开始游戏。`,
+                    );
+                    return;
+                }
+                this._game?.setDeckTypeIds(ids);
+            } else if (configured.length > 0) {
+                this._home?.showToast(
+                    `请至少在 GameApp 中配置 ${MIN_DECK_TYPE_COUNT} 种格子贴图；当前仅 ${configured.length} 种。`,
+                );
+                return;
+            } else {
+                this._game?.setDeckTypeIds(null);
+            }
         }
         this._enterGame();
     }
@@ -294,9 +451,18 @@ export class GameApp extends Component {
         const hr = this._home?.node;
         if (!hr) return;
         DeckSelectDialog.open(hr, {
-            tileFaces: this.tileFaceSprites ?? [],
+            tileFaces: this._getTileFacesForGame(),
             panelBg: this.deckDialogPanelBg,
-            onSaved: (ids) => this._game?.setDeckTypeIds(ids),
+            actionButtons: this._getDialogActionButtons(),
+            shopEnabled: this._shopEnabled,
+            shopGroups: this._shopGroups.length > 0 ? this._shopGroups : undefined,
+            deckEntries: this._shopEnabled ? getPurchasedDeckEntries(this._shopGroups) : undefined,
+            onSaved: (ids) => {
+                this._game?.setDeckTypeIds(ids);
+                if (this._shopEnabled) {
+                    this._game?.setTileFaceSprites(this._getTileFacesForGame());
+                }
+            },
         });
     }
 
@@ -305,103 +471,35 @@ export class GameApp extends Component {
         if (!hr) return;
         if (hr.getChildByName('ShopModal')) return;
 
-        const vs = getLayoutSizeForNode(hr);
-        const root = new Node('ShopModal');
-        root.setParent(hr);
-        root.setSiblingIndex(hr.children.length - 1);
-        const rw = root.addComponent(UITransform);
-        rw.setContentSize(vs.width, vs.height);
-        const wg = root.addComponent(Widget);
-        wg.isAlignTop = wg.isAlignBottom = wg.isAlignLeft = wg.isAlignRight = true;
-        wg.top = wg.bottom = wg.left = wg.right = 0;
-        wg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        wg.updateAlignment();
-
-        const dim = new Node('Dim');
-        dim.setParent(root);
-        dim.addComponent(UITransform).setContentSize(vs.width, vs.height);
-        const dW = dim.addComponent(Widget);
-        dW.isAlignTop = dW.isAlignBottom = dW.isAlignLeft = dW.isAlignRight = true;
-        dW.top = dW.bottom = dW.left = dW.right = 0;
-        dW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        dW.updateAlignment();
-        const dg = dim.addComponent(Graphics);
-        dg.fillColor = new Color(0, 0, 0, 160);
-        dg.fillRect(-vs.width / 2, -vs.height / 2, vs.width, vs.height);
-        const dimBtn = dim.addComponent(Button);
-        dimBtn.transition = Button.Transition.NONE;
-        dim.on(Button.EventType.CLICK, () => root.destroy(), this);
-
-        const panelW = Math.min(440, vs.width - 40);
-        const panelH = 220;
-        const panel = new Node('Panel');
-        panel.setParent(root);
-        panel.addComponent(UITransform).setContentSize(panelW, panelH);
-        const pWg = panel.addComponent(Widget);
-        pWg.isAlignHorizontalCenter = true;
-        pWg.isAlignVerticalCenter = true;
-        pWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        pWg.updateAlignment();
-
-        if (!this.shopDialogPanelBg) {
-            const pg = panel.addComponent(Graphics);
-            pg.fillColor = new Color(0x1b, 0x26, 0x3b, 245);
-            pg.fillRect(-panelW / 2, -panelH / 2, panelW, panelH);
-        } else {
-            const sp = panel.addComponent(Sprite);
-            sp.spriteFrame = this.shopDialogPanelBg;
-            sp.sizeMode = Sprite.SizeMode.CUSTOM;
-            sp.color = Color.WHITE;
+        this._rebuildShopCatalog();
+        if (!this._shopEnabled) {
+            this._home?.showToast('请先在 GameApp 的商店分组中配置方块贴图。');
+            return;
         }
 
-        const titleN = new Node('Title');
-        titleN.setParent(panel);
-        titleN.setPosition(0, panelH / 2 - 40, 0);
-        titleN.addComponent(UITransform).setContentSize(panelW - 24, 36);
-        const tl = titleN.addComponent(Label);
-        tl.string = '商店';
-        tl.fontSize = 26;
-        tl.color = new Color(0xe9, 0xc4, 0x6a, 255);
-        tl.horizontalAlign = Label.HorizontalAlign.CENTER;
-        tl.verticalAlign = Label.VerticalAlign.CENTER;
-
-        const msgN = new Node('Msg');
-        msgN.setParent(panel);
-        msgN.setPosition(0, -8, 0);
-        msgN.addComponent(UITransform).setContentSize(panelW - 40, 80);
-        const ml = msgN.addComponent(Label);
-        ml.string = '商店功能即将开放，敬请期待。';
-        ml.fontSize = 22;
-        ml.color = Color.WHITE;
-        ml.horizontalAlign = Label.HorizontalAlign.CENTER;
-        ml.verticalAlign = Label.VerticalAlign.CENTER;
-        ml.overflow = Label.Overflow.RESIZE_HEIGHT;
-
-        const closeN = new Node('Close');
-        closeN.setParent(panel);
-        closeN.setPosition(0, -panelH / 2 + 44, 0);
-        closeN.addComponent(UITransform).setContentSize(160, 48);
-        const cg = closeN.addComponent(Graphics);
-        cg.fillColor = new Color(0x2d, 0x6a, 0x4f, 255);
-        cg.fillRect(-80, -24, 160, 48);
-        const cbtn = closeN.addComponent(Button);
-        cbtn.transition = Button.Transition.NONE;
-        const clN = new Node('Label');
-        clN.setParent(closeN);
-        clN.addComponent(UITransform).setContentSize(160, 48);
-        const cl = clN.addComponent(Label);
-        cl.string = '关闭';
-        cl.fontSize = 22;
-        cl.color = Color.WHITE;
-        cl.horizontalAlign = Label.HorizontalAlign.CENTER;
-        cl.verticalAlign = Label.VerticalAlign.CENTER;
-        closeN.on(Button.EventType.CLICK, () => root.destroy(), this);
+        ShopDialog.open(hr, {
+            groups: this._shopGroups,
+            panelBg: this.shopDialogPanelBg,
+            actionButtons: this._getDialogActionButtons(),
+            coinIcon: this.coinIcon,
+            propIcons: {
+                hint: this.toolBtnHintNormal,
+                refresh: this.toolBtnRefreshNormal,
+                eliminate: this.toolBtnEliminateNormal,
+            },
+            onCoinsChanged: () => this._refreshHomeCoins(),
+        });
     }
 
     private _enterGame() {
         linkLog('GameApp._enterGame', '点击开始 → 显示游戏页');
         if (this._home) this._home.node.active = false;
         if (this._game) {
+            this._game.onBack = () => this._onGameBack();
+            this._game.onLevelWin = (count) => this._onLevelWin(count);
+            this._game.setShopPropsEnabled(this._shopEnabled);
+            this._game.setTileFaceSprites(this._getTileFacesForGame());
+            this._syncDeckToGameView();
             this._game.node.active = true;
             this._game.beginOrRestartLevel(1);
         }
@@ -411,6 +509,7 @@ export class GameApp extends Component {
         linkLog('GameApp._enterHome', '返回首页');
         if (this._game) this._game.node.active = false;
         if (this._home) this._home.node.active = true;
+        this._refreshHomeCoins();
     }
 
     /** 2D UI 必须挂在带 Canvas 的节点下，否则只会看到主摄像机清屏色 */

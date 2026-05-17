@@ -26,12 +26,12 @@ import { linkWarn } from '../util/LinkUpDebug';
 
 const { ccclass } = _decorator;
 
-/** 固定 14 行 × 8 列 = 112 格；最多 32 种类型（每种偶数张，总和 112，见 _buildFullLevelBag） */
+/** 固定 14 行 × 8 列 = 112 格；卡组最多 40 种类型（每种偶数张，总和 112，见 _buildFullLevelBag） */
 export const BOARD_ROWS = 14;
 export const BOARD_COLS = 8;
-export const TYPE_COUNT = 32;
+export const TYPE_COUNT = 40;
 /** App 上可配置的棋盘格子贴图槽位数：第 n 项对应「n 号类型」（与格子数字一致） */
-export const TILE_SPRITE_SLOTS = 32;
+export const TILE_SPRITE_SLOTS = 40;
 
 const COLOR_SEL = new Color(0xe9, 0xc4, 0x6a, 255);
 const COLOR_HINT = new Color(0xe9, 0xc4, 0x6a, 255);
@@ -46,6 +46,10 @@ const STAR_SIZE_MAX = 15;
 const STAR_PATH_RES = 'icon/star';
 /** 有牌时的格子底（与棋盘底区分）；整块随节点 active 一起隐藏 */
 const COLOR_CELL_FACE = new Color(0x3a, 0x4d, 0x6e, 255);
+
+/** 发牌：逐格间隔（秒）；单格落子动画时长 */
+const DEAL_INTERVAL = 0.014;
+const DEAL_DROP_DURATION = 0.07;
 
 /** 扩展盘外圈映射到本地坐标时，向棋盘内侧拉拢的比例（越大越贴棋盘，越不易伸出画面外） */
 const EDGE_LINE_PULL = 0.32;
@@ -75,11 +79,26 @@ export class LinkUpBoard extends Component {
     /** 已配置贴图种类数 &lt; TILE_SPRITE_SLOTS：不显示数字，盘面只出现已配置类型 */
     private _spritesOnlyMode = false;
 
-    onWin: (() => void) | null = null;
+    /** 本关累计成功连线次数（通关时用于金币奖励） */
+    private _levelConnectCount = 0;
+
+    onWin: ((connectCount: number) => void) | null = null;
     /** 成功连线并消除一对时，由 GameView 注入以播放音效 */
     onConnectSfx: (() => void) | null = null;
     /** 场上无可连对时由 GameView 弹提示并刷新；未注入则直接 shuffleAll */
     onNoConnectablePair: (() => void) | null = null;
+    /** 动态发牌全部落子完成后 */
+    onDealComplete: (() => void) | null = null;
+
+    private _dealing = false;
+    private _dealOrder: Array<{ r: number; c: number }> = [];
+    private _dealIndex = 0;
+    /** 每次 _stopDealing 递增，用于丢弃被中断的发牌 update */
+    private _dealSessionId = 0;
+    private _activeDealId = 0;
+    private _dealAccum = 0;
+    private _dealFinishWait = 0;
+    private _dealPhase: 'spawning' | 'finishing' | null = null;
 
     /** 由 GameApp 传入；可随时调用刷新当前棋盘显示 */
     setTileFaceSprites(frames: (SpriteFrame | null)[] | null | undefined) {
@@ -174,12 +193,26 @@ export class LinkUpBoard extends Component {
     }
 
     buildLevel() {
+        this._levelConnectCount = 0;
         this._clearBoard();
         this._ensureLayout();
         this._fillRandomSolvable();
     }
 
+    getLevelConnectCount(): number {
+        return this._levelConnectCount;
+    }
+
+    resetLevelConnectCount(): void {
+        this._levelConnectCount = 0;
+    }
+
+    isDealing(): boolean {
+        return this._dealing;
+    }
+
     private _clearBoard() {
+        this._stopDealing();
         this._unscheduleConnectLineFx();
         this.node.removeAllChildren();
         this._lineNode = null;
@@ -536,16 +569,15 @@ export class LinkUpBoard extends Component {
                 }
             }
             if (this.findHintPair() != null) {
-                this._spawnCells();
+                this._spawnCells(true);
                 return;
             }
         }
-        this._spawnCells();
-        this.scheduleOnce(() => this._invokeNoConnectOrShuffle(), 0);
+        this._spawnCells(true);
     }
 
     private _invokeNoConnectOrShuffle() {
-        if (!this._layoutReady() || this._isEmpty()) return;
+        if (this._dealing || !this._layoutReady() || this._isEmpty()) return;
         if (!this.hasAnyConnectablePair()) {
             if (this.onNoConnectablePair) {
                 this.onNoConnectablePair();
@@ -562,61 +594,167 @@ export class LinkUpBoard extends Component {
         }
     }
 
-    private _spawnCells() {
-        this._unscheduleConnectLineFx();
-        this.node.removeAllChildren();
-        this._lineNode = null;
-        this._starBurstRoot = null;
+    private _stopDealing() {
+        this._dealSessionId++;
+        this._dealing = false;
+        this._dealPhase = null;
+        this._dealAccum = 0;
+        this._dealFinishWait = 0;
+    }
+
+    protected update(dt: number) {
+        if (this._dealPhase == null || this._activeDealId !== this._dealSessionId || !this.isValid) return;
+
+        if (this._dealPhase === 'finishing') {
+            this._dealFinishWait += dt;
+            if (this._dealFinishWait >= DEAL_DROP_DURATION) {
+                this._dealPhase = null;
+                this._finishDealing();
+            }
+            return;
+        }
+
+        this._dealAccum += dt;
+        while (this._dealAccum >= DEAL_INTERVAL && this._dealIndex < this._dealOrder.length) {
+            this._dealAccum -= DEAL_INTERVAL;
+            this._spawnOneDealCell();
+        }
+        if (this._dealIndex >= this._dealOrder.length) {
+            this._dealPhase = 'finishing';
+            this._dealFinishWait = 0;
+        }
+    }
+
+    private _finishDealing() {
+        if (!this.isValid) return;
+        this._dealing = false;
+        this._applySelectionTint();
+        this.onDealComplete?.();
+        this._invokeNoConnectOrShuffle();
+    }
+
+    private _buildDealOrder(): Array<{ r: number; c: number }> {
+        const order: Array<{ r: number; c: number }> = [];
+        for (let r = 0; r < BOARD_ROWS; r++) {
+            for (let c = 0; c < BOARD_COLS; c++) {
+                order.push({ r, c });
+            }
+        }
+        return order;
+    }
+
+    private _cellLocalPosition(r: number, c: number): Vec3 {
         const cw = this._cellSize.w;
         const ch = this._cellSize.h;
         const originX = -((BOARD_COLS * cw) >> 1);
         const originY = ((BOARD_ROWS * ch) >> 1);
+        return new Vec3(originX + c * cw + cw / 2, originY - r * ch - ch / 2, 0);
+    }
 
-        for (let r = 0; r < BOARD_ROWS; r++) {
-            for (let c = 0; c < BOARD_COLS; c++) {
-                const n = new Node(`cell_${r}_${c}`);
-                n.setParent(this.node);
-                const tw = cw - 2;
-                const th = ch - 2;
-                const ut = n.addComponent(UITransform);
-                ut.setContentSize(tw, th);
-                n.setPosition(originX + c * cw + cw / 2, originY - r * ch - ch / 2, 0);
+    private _createCellAt(r: number, c: number) {
+        const cw = this._cellSize.w;
+        const ch = this._cellSize.h;
+        const tw = cw - 2;
+        const th = ch - 2;
+        const n = new Node(`cell_${r}_${c}`);
+        n.setParent(this.node);
+        const ut = n.addComponent(UITransform);
+        ut.setContentSize(tw, th);
+        n.setPosition(this._cellLocalPosition(r, c));
 
-                const faceN = new Node('Face');
-                faceN.setParent(n);
-                faceN.addComponent(UITransform).setContentSize(tw, th);
-                const faceG = faceN.addComponent(Graphics);
-                faceG.fillColor = COLOR_CELL_FACE;
-                faceG.fillRect(-tw / 2, -th / 2, tw, th);
+        const faceN = new Node('Face');
+        faceN.setParent(n);
+        faceN.addComponent(UITransform).setContentSize(tw, th);
+        const faceG = faceN.addComponent(Graphics);
+        faceG.fillColor = COLOR_CELL_FACE;
+        faceG.fillRect(-tw / 2, -th / 2, tw, th);
 
-                const imgN = new Node('Img');
-                imgN.setParent(faceN);
-                imgN.addComponent(UITransform).setContentSize(tw, th);
-                const tileSp = imgN.addComponent(Sprite);
-                tileSp.sizeMode = Sprite.SizeMode.CUSTOM;
-                tileSp.enabled = false;
+        const imgN = new Node('Img');
+        imgN.setParent(faceN);
+        imgN.addComponent(UITransform).setContentSize(tw, th);
+        const tileSp = imgN.addComponent(Sprite);
+        tileSp.sizeMode = Sprite.SizeMode.CUSTOM;
+        tileSp.enabled = false;
 
-                const lblN = new Node('Lbl');
-                lblN.setParent(n);
-                lblN.addComponent(UITransform).setContentSize(tw, th);
-                lblN.setSiblingIndex(1);
+        const lblN = new Node('Lbl');
+        lblN.setParent(n);
+        lblN.addComponent(UITransform).setContentSize(tw, th);
+        lblN.setSiblingIndex(1);
 
-                const lab = lblN.addComponent(Label);
-                lab.string = String(this.grid[r][c] ?? '');
-                lab.fontSize = Math.min(26, Math.floor(Math.min(cw, ch) * 0.42));
-                lab.color = Color.WHITE;
-                lab.horizontalAlign = Label.HorizontalAlign.CENTER;
-                lab.verticalAlign = Label.VerticalAlign.CENTER;
+        const lab = lblN.addComponent(Label);
+        lab.string = String(this.grid[r][c] ?? '');
+        lab.fontSize = Math.min(26, Math.floor(Math.min(cw, ch) * 0.42));
+        lab.color = Color.WHITE;
+        lab.horizontalAlign = Label.HorizontalAlign.CENTER;
+        lab.verticalAlign = Label.VerticalAlign.CENTER;
 
-                const btn = n.addComponent(Button);
-                btn.transition = Button.Transition.NONE;
-                btn.target = n;
-                n.on(Button.EventType.CLICK, () => this._onCellTap(r, c), this);
+        const btn = n.addComponent(Button);
+        btn.transition = Button.Transition.NONE;
+        btn.target = n;
+        n.on(Button.EventType.CLICK, () => this._onCellTap(r, c), this);
 
-                this._cells[r][c] = n;
+        this._cells[r][c] = n;
+    }
+
+    private _playDealTween(r: number, c: number) {
+        const n = this._cells[r][c];
+        if (!n?.isValid) return;
+        const finalPos = this._cellLocalPosition(r, c);
+        const ch = this._cellSize.h;
+        n.setPosition(finalPos.x, finalPos.y + ch * 0.42, finalPos.z);
+        n.setScale(0.5, 0.5, 1);
+        const op = n.getComponent(UIOpacity) ?? n.addComponent(UIOpacity);
+        op.opacity = 40;
+
+        tween(n).stop();
+        tween(op).stop();
+        tween(n)
+            .parallel(
+                tween(n).to(
+                    DEAL_DROP_DURATION,
+                    { position: finalPos, scale: new Vec3(1, 1, 1) },
+                    { easing: easing.backOut },
+                ),
+                tween(op).to(DEAL_DROP_DURATION * 0.85, { opacity: 255 }, { easing: easing.sineOut }),
+            )
+            .start();
+    }
+
+    private _spawnOneDealCell() {
+        if (this._dealIndex >= this._dealOrder.length) return;
+        const { r, c } = this._dealOrder[this._dealIndex++];
+        this._createCellAt(r, c);
+        this._syncCellVisual(r, c);
+        this._playDealTween(r, c);
+    }
+
+    /** @param animated true：从上往下、从左往右逐格发牌 */
+    private _spawnCells(animated: boolean) {
+        this._unscheduleConnectLineFx();
+        this.node.removeAllChildren();
+        this._lineNode = null;
+        this._starBurstRoot = null;
+
+        if (!animated) {
+            this._stopDealing();
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    this._createCellAt(r, c);
+                }
             }
+            this._paintAll();
+            return;
         }
-        this._paintAll();
+
+        this._stopDealing();
+        this._activeDealId = this._dealSessionId;
+        this._dealing = true;
+        this._dealOrder = this._buildDealOrder();
+        this._dealIndex = 0;
+        this._dealAccum = 0;
+        this._dealFinishWait = 0;
+        this._dealPhase = 'spawning';
+        this._spawnOneDealCell();
     }
 
     private _paintAll() {
@@ -724,6 +862,7 @@ export class LinkUpBoard extends Component {
     }
 
     private _onCellTap(r: number, c: number) {
+        if (this._dealing) return;
         const v = this.grid[r][c];
         if (v == null) return;
 
@@ -746,6 +885,7 @@ export class LinkUpBoard extends Component {
             return;
         }
         if (LinkUpPathFinder.canConnect(this.grid, r0, c0, r, c)) {
+            this._levelConnectCount++;
             this.onConnectSfx?.();
             this._drawConnectLine(r0, c0, r, c);
             this.grid[r0][c0] = null;
@@ -771,7 +911,7 @@ export class LinkUpBoard extends Component {
 
     private _afterChange() {
         if (this._isEmpty()) {
-            this.onWin?.();
+            this.onWin?.(this._levelConnectCount);
             return;
         }
         if (!this.hasAnyConnectablePair()) {
@@ -809,6 +949,7 @@ export class LinkUpBoard extends Component {
     }
 
     showHint() {
+        if (this._dealing) return;
         const p = this.findHintPair();
         if (!p) return;
         this._clearHintVisual();
@@ -846,7 +987,7 @@ export class LinkUpBoard extends Component {
     };
 
     shuffleAll(ensurePair: boolean) {
-        if (!this._layoutReady()) return;
+        if (this._dealing || !this._layoutReady()) return;
         const bag: number[] = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
@@ -884,7 +1025,7 @@ export class LinkUpBoard extends Component {
     }
 
     removeTwoRandomTiles() {
-        if (!this._layoutReady()) return;
+        if (this._dealing || !this._layoutReady()) return;
         const occ: Array<{ r: number; c: number }> = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {

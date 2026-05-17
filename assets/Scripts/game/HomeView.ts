@@ -20,6 +20,10 @@ const { ccclass } = _decorator;
 
 const C_BTN = new Color(0x2d, 0x6a, 0x4f, 255);
 
+/** 开始游戏按钮贴图显示尺寸 */
+const START_BTN_W = 380;
+const START_BTN_H = 130;
+
 /** 首页主按钮贴图：由 GameApp 注入；未配置则用与项目样式一致的纯色底 + 文字 */
 export type HomeMainButtonSprites = {
     startNormal: SpriteFrame | null;
@@ -43,18 +47,27 @@ function addCenterFillRect(node: Node, w: number, h: number, fill: Color) {
     g.fillRect(-w / 2, -h / 2, w, h);
 }
 
+function applyLabelBlackOutline(lab: Label, width = 2) {
+    lab.enableOutline = true;
+    lab.outlineColor = Color.BLACK;
+    lab.outlineWidth = width;
+}
+
 @ccclass('HomeView')
 export class HomeView extends Component {
     private _opts: HomeViewInitOptions | null = null;
     private _bgSprite: Sprite | null = null;
     private _configuredBg: SpriteFrame | null = null;
     private _toastNode: Node | null = null;
+    private _coinLabel: Label | null = null;
+    private _coinIconSf: SpriteFrame | null = null;
 
     init(opts: HomeViewInitOptions) {
         this._opts = opts;
         if (!this.node.getChildByName('StartGame')) {
             this._buildUi();
         }
+        this._ensureCoinBar();
         this._layoutPanels();
     }
 
@@ -163,6 +176,90 @@ export class HomeView extends Component {
         this._layoutPanels();
     }
 
+    /** 首页左上角金币展示 */
+    setCoinDisplay(coins: number, icon: SpriteFrame | null = null) {
+        this._coinIconSf = icon;
+        this._ensureCoinBar();
+        if (this._coinLabel) {
+            this._coinLabel.string = `${coins}`;
+            applyLabelBlackOutline(this._coinLabel);
+        }
+        const bar = this.node.getChildByName('CoinBar');
+        const iconN = bar?.getChildByName('CoinIcon');
+        if (iconN && icon) {
+            const sp = iconN.getComponent(Sprite) ?? iconN.addComponent(Sprite);
+            sp.spriteFrame = icon;
+            sp.sizeMode = Sprite.SizeMode.TRIMMED;
+            const r = icon.rect;
+            const s = Math.min(28 / Math.max(1, r.width), 28 / Math.max(1, r.height));
+            iconN.setScale(s, s, 1);
+            iconN.active = true;
+        } else if (iconN) {
+            iconN.active = false;
+        }
+    }
+
+    private _ensureCoinBar() {
+        const root = this.node;
+        let bar = root.getChildByName('CoinBar');
+        if (!bar) {
+            bar = new Node('CoinBar');
+            bar.setParent(root);
+            const barUt = bar.addComponent(UITransform);
+            barUt.setContentSize(180, 40);
+            barUt.setAnchorPoint(0, 0.5);
+            const w = bar.addComponent(Widget);
+            w.isAlignTop = true;
+            w.isAlignLeft = true;
+            w.top = 48;
+            w.left = 24;
+            w.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+            w.updateAlignment();
+
+            const iconN = new Node('CoinIcon');
+            iconN.setParent(bar);
+            iconN.setPosition(20, 0, 0);
+            iconN.addComponent(UITransform).setContentSize(32, 32);
+
+            const labN = new Node('CoinCount');
+            labN.setParent(bar);
+            labN.setPosition(52, 0, 0);
+            labN.addComponent(UITransform).setContentSize(120, 36);
+            this._coinLabel = labN.addComponent(Label);
+            this._coinLabel.fontSize = 24;
+            this._coinLabel.color = new Color(0xe9, 0xc4, 0x6a, 255);
+            this._coinLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
+            this._coinLabel.verticalAlign = Label.VerticalAlign.CENTER;
+            applyLabelBlackOutline(this._coinLabel);
+        } else {
+            const barW = bar.getComponent(Widget);
+            if (barW) {
+                barW.isAlignRight = false;
+                barW.isAlignLeft = true;
+                barW.left = 24;
+                barW.right = 0;
+                barW.updateAlignment();
+            }
+            const barUt = bar.getComponent(UITransform);
+            if (barUt) barUt.setAnchorPoint(0, 0.5);
+            const iconN = bar.getChildByName('CoinIcon');
+            if (iconN) iconN.setPosition(20, 0, 0);
+            const labN = bar.getChildByName('CoinCount');
+            if (labN) labN.setPosition(52, 0, 0);
+        }
+        if (this._coinIconSf) {
+            const iconN = bar.getChildByName('CoinIcon');
+            if (iconN) {
+                const sp = iconN.getComponent(Sprite) ?? iconN.addComponent(Sprite);
+                sp.spriteFrame = this._coinIconSf;
+                sp.sizeMode = Sprite.SizeMode.TRIMMED;
+                const r = this._coinIconSf.rect;
+                const s = Math.min(28 / Math.max(1, r.width), 28 / Math.max(1, r.height));
+                iconN.setScale(s, s, 1);
+            }
+        }
+    }
+
     private _layoutPanels = () => {
         const sz = getLayoutSizeForNode(this.node);
         const w = sz.width;
@@ -181,17 +278,27 @@ export class HomeView extends Component {
         }
 
         const START_Y_OFFSET = -70;
+        const START_Y_DOWN = 120;
         const startY = -h * 0.15 + START_Y_OFFSET;
         const startNd = root.getChildByName('StartGame');
-        if (startNd) startNd.setPosition(0, startY, 100);
+        if (startNd) {
+            startNd.setPosition(0, startY - START_Y_DOWN, 100);
+            const ut = startNd.getComponent(UITransform);
+            if (ut) ut.setContentSize(START_BTN_W, START_BTN_H);
+            const labN = startNd.getChildByName('Label');
+            labN?.getComponent(UITransform)?.setContentSize(START_BTN_W, START_BTN_H);
+        }
 
         const deckNd = root.getChildByName('BtnDeck');
-        if (deckNd) deckNd.setPosition(-200, startY + 100, 100);
+        if (deckNd) deckNd.setPosition(-200, startY + 30, 100);
 
         const shopNd = root.getChildByName('BtnShop');
-        if (shopNd) shopNd.setPosition(200, startY + 100, 100);
+        if (shopNd) shopNd.setPosition(200, startY + 30, 100);
 
         if (bg) bg.setSiblingIndex(0);
+        const coinBar = root.getChildByName('CoinBar');
+        if (coinBar) coinBar.setSiblingIndex(root.children.length - 1);
+
         const topNames = ['Toast', 'DeckSelectModal', 'ShopModal'];
         let si = Math.max(0, root.children.length - 1);
         for (const name of ['StartGame', 'BtnDeck', 'BtnShop']) {
@@ -205,6 +312,7 @@ export class HomeView extends Component {
             const n = root.getChildByName(name);
             if (n) n.setSiblingIndex(root.children.length - 1);
         }
+        if (coinBar?.isValid) coinBar.setSiblingIndex(root.children.length - 1);
 
         linkLog('HomeView._layoutPanels', 'layout', {
             path: nodePath(this.node),
@@ -319,8 +427,8 @@ export class HomeView extends Component {
         this._mkHomeButton(
             'StartGame',
             '开始游戏',
-            420,
-            96,
+            START_BTN_W,
+            START_BTN_H,
             sp?.startNormal ?? null,
             sp?.startPressed ?? null,
             () => this._opts?.onStart?.(),

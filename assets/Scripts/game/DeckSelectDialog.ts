@@ -14,21 +14,55 @@ import {
 } from 'cc';
 import { getLayoutSizeForNode } from '../util/ViewSize';
 import {
+    type DeckEntry,
     getConfiguredTypeIds,
+    getDeckSelectableTypeIds,
+    isDeckSelectionValid,
+    loadDeckShopKeysRaw,
     loadDeckTypeIdsRaw,
+    MAX_DECK_TYPE_COUNT,
     MIN_DECK_TYPE_COUNT,
+    saveDeckShopKeys,
     saveDeckTypeIds,
 } from '../util/DeckSelectionStorage';
+import { deckShopKeysToTypeIds, type ShopCatalogGroup } from '../util/ShopCatalog';
+import {
+    type DialogActionButtonResult,
+    type DialogActionButtonSprites,
+    mkDialogActionButton,
+    setDialogOkEnabled,
+} from '../util/DialogActionButtons';
+import {
+    applyDialogPanelBackground,
+    applyLabelBlackOutline,
+    getDialogPanelWidthFromParent,
+    mkDialogPanelShell,
+    refreshDialogPanelBackgroundSize,
+} from '../util/DialogPanelBg';
 
-const C_PANEL = new Color(0x1b, 0x26, 0x3b, 245);
+type DeckGridItem = { key: string | number; sf: SpriteFrame };
+type DeckSection = { title: string; items: DeckGridItem[] };
+
+/** 配置卡组背景贴图在底板高度上额外向下拉伸的像素 */
+const DECK_BG_TEXTURE_STRETCH_H = 80;
+
 const C_DIM = new Color(0, 0, 0, 160);
 const C_ACCENT = new Color(0xe9, 0xc4, 0x6a, 255);
-const C_BTN = new Color(0x2d, 0x6a, 0x4f, 255);
-const C_BTN_DISABLED = new Color(0x55, 0x55, 0x55, 200);
-
-/** 卡组弹窗内每个方块预览边长（逻辑像素） */
+/** 卡组格：未选中描边 */
+const C_DECK_CELL_BORDER = new Color(0x41, 0x5a, 0x77, 200);
+/** 卡组格：选中金框与底光 */
+const C_DECK_SEL_BORDER = new Color(0xff, 0xd9, 0x52, 255);
+const C_DECK_SEL_GLOW = new Color(0xff, 0xeb, 0xa8, 100);
+const C_DECK_SEL_INNER = new Color(0xff, 0xf5, 0xc8, 200);
+const C_DECK_SEL_FACE = new Color(0xff, 0xfc, 0xe8, 255);
+const DECK_SEL_BORDER_W = 7;
+const DECK_UNSEL_BORDER_W = 2;
+const DECK_SEL_FACE_SCALE = 1.1;
 const CELL_FACE = 100;
 const CELL_GAP = 10;
+const DECK_GROUP_TITLE_H = 36;
+const DECK_GROUP_SECTION_GAP = 24;
+const DECK_CONTENT_TOP_PAD = 8;
 const PANEL_PAD_X = 24;
 const TITLE_AREA = 88;
 const FOOTER_AREA = 132;
@@ -39,20 +73,16 @@ function addCenterFillRect(node: Node, w: number, h: number, fill: Color) {
     g.fillRect(-w / 2, -h / 2, w, h);
 }
 
-/**
- * 首页「配置卡组」弹窗：勾选至少 {@link MIN_DECK_TYPE_COUNT} 种已配置贴图的类型。
- * 通过静态方法挂到父节点上，关闭时销毁根节点。
- */
 export class DeckSelectDialog extends Component {
-    /**
-     * @param parent 一般为 HomeRoot
-     * @param onSaved 仅在点击确定且合法时调用
-     */
     static open(
         parent: Node,
         opts: {
             tileFaces: Array<SpriteFrame | null>;
             panelBg: SpriteFrame | null;
+            actionButtons?: DialogActionButtonSprites | null;
+            shopEnabled?: boolean;
+            shopGroups?: ShopCatalogGroup[];
+            deckEntries?: DeckEntry[];
             onSaved?: (ids: number[]) => void;
             onClose?: () => void;
         },
@@ -76,32 +106,48 @@ export class DeckSelectDialog extends Component {
     private _opts!: {
         tileFaces: Array<SpriteFrame | null>;
         panelBg: SpriteFrame | null;
+        actionButtons: DialogActionButtonSprites | null;
+        shopEnabled: boolean;
+        shopGroups?: ShopCatalogGroup[];
+        deckEntries?: DeckEntry[];
         onSaved?: (ids: number[]) => void;
         onClose?: () => void;
     };
 
-    private _selected = new Set<number>();
+    private _selectedIds = new Set<number>();
+    private _selectedShopKeys = new Set<string>();
     private _countLabel: Label | null = null;
-    private _okBtnNode: Node | null = null;
-    private _okGraphics: Graphics | null = null;
+    private _okBtn: DialogActionButtonResult | null = null;
 
     init(
         opts: {
             tileFaces: Array<SpriteFrame | null>;
             panelBg: SpriteFrame | null;
+            actionButtons?: DialogActionButtonSprites | null;
+            shopEnabled?: boolean;
+            shopGroups?: ShopCatalogGroup[];
+            deckEntries?: DeckEntry[];
             onSaved?: (ids: number[]) => void;
             onClose?: () => void;
         },
         pw: number,
         ph: number,
     ) {
-        this._opts = opts;
+        this._opts = {
+            ...opts,
+            shopEnabled: !!opts.shopEnabled,
+            actionButtons: opts.actionButtons ?? null,
+        };
         this._build(pw, ph);
     }
 
     private _close() {
         this._opts.onClose?.();
         if (this.node?.isValid) this.node.destroy();
+    }
+
+    private _selectionCount(): number {
+        return this._opts.shopEnabled ? this._selectedShopKeys.size : this._selectedIds.size;
     }
 
     private _build(pw: number, ph: number) {
@@ -119,77 +165,98 @@ export class DeckSelectDialog extends Component {
         dimBtn.transition = Button.Transition.NONE;
         dim.on(Button.EventType.CLICK, () => this._close(), this);
 
+        const shopOn = this._opts.shopEnabled;
         const faces = this._opts.tileFaces ?? [];
-        const available = getConfiguredTypeIds(faces);
-        const initial = loadDeckTypeIdsRaw(faces);
+        const deckEntries = this._opts.deckEntries ?? [];
+        const shopGroups = this._opts.shopGroups ?? [];
 
-        if (available.length < MIN_DECK_TYPE_COUNT) {
-            const panelW = Math.min(640, pw - 32);
+        const availableCount = shopOn ? deckEntries.length : getDeckSelectableTypeIds(faces, false).length;
+
+        if (availableCount < MIN_DECK_TYPE_COUNT) {
+            const panelW = getDialogPanelWidthFromParent(this.node);
             const panelH = Math.min(560, ph - 48);
-            const panel = this._mkPanelShell(panelW, panelH);
-            if (!this._opts.panelBg) {
-                addCenterFillRect(panel, panelW, panelH, C_PANEL);
-            } else {
-                const sp = panel.addComponent(Sprite);
-                sp.spriteFrame = this._opts.panelBg;
-                sp.sizeMode = Sprite.SizeMode.CUSTOM;
-                sp.color = Color.WHITE;
-            }
+            const panel = mkDialogPanelShell(this.node, panelW, panelH);
+            const bgOpts = { bgHeightExtra: DECK_BG_TEXTURE_STRETCH_H };
+            applyDialogPanelBackground(panel, panelW, panelH, this._opts.panelBg, bgOpts);
             const tip = new Node('Tip');
             tip.setParent(panel);
             tip.addComponent(UITransform).setContentSize(panelW - 40, 200);
             tip.setPosition(0, 20, 0);
             const tl = tip.addComponent(Label);
-            tl.string = `当前在 GameApp 中已配置的方块贴图不足 ${MIN_DECK_TYPE_COUNT} 种，请至少配置 ${MIN_DECK_TYPE_COUNT} 个格子贴图后再配置卡组。`;
+            tl.string = shopOn
+                ? `请先在「商店」获得至少 ${MIN_DECK_TYPE_COUNT} 种方块。当前已拥有 ${deckEntries.length} 种。`
+                : `当前在 GameApp 中已配置的方块贴图不足 ${MIN_DECK_TYPE_COUNT} 种，请至少配置 ${MIN_DECK_TYPE_COUNT} 个格子贴图后再配置卡组。`;
             tl.fontSize = 22;
             tl.color = Color.WHITE;
             tl.horizontalAlign = Label.HorizontalAlign.CENTER;
             tl.verticalAlign = Label.VerticalAlign.CENTER;
             tl.overflow = Label.Overflow.RESIZE_HEIGHT;
-
-            this._mkTextButton(panel, 0, -panelH / 2 + 52, '关闭', C_BTN, () => this._close());
+            mkDialogActionButton(
+                panel,
+                0,
+                -panelH / 2 + 52,
+                'close',
+                '关闭',
+                this._opts.actionButtons,
+                () => this._close(),
+                this,
+            );
             return;
         }
 
-        const allow = new Set(available);
-        for (const id of initial) {
-            if (allow.has(id)) this._selected.add(id);
+        if (shopOn) {
+            const initialKeys = loadDeckShopKeysRaw(shopGroups);
+            for (const k of initialKeys) {
+                if (deckEntries.some((e) => e.shopKey === k)) this._selectedShopKeys.add(k);
+            }
+        } else {
+            const available = getConfiguredTypeIds(faces);
+            const initial = loadDeckTypeIdsRaw(faces, false);
+            const allow = new Set(available);
+            for (const id of initial) {
+                if (allow.has(id)) this._selectedIds.add(id);
+            }
         }
 
-        const maxOuterW = Math.min(720, pw - 32);
+        const gridItems: DeckGridItem[] = shopOn
+            ? deckEntries.map((e) => ({ key: e.shopKey, sf: e.sprite }))
+            : getConfiguredTypeIds(faces).map((id) => ({
+                  key: id,
+                  sf: faces[id - 1]!,
+              }));
+
+        const sections = this._buildDeckSections(shopOn, shopGroups, gridItems, faces);
+
+        const panelW = getDialogPanelWidthFromParent(this.node);
         const maxOuterH = Math.min(ph - 48, 920);
-        const innerW = maxOuterW - PANEL_PAD_X * 2;
+        const innerW = panelW - PANEL_PAD_X * 2;
         let cols = Math.floor((innerW + CELL_GAP) / (CELL_FACE + CELL_GAP));
         cols = Math.max(2, Math.min(8, cols));
-        const rows = Math.max(1, Math.ceil(available.length / cols));
-        const gridW = cols * CELL_FACE + Math.max(0, cols - 1) * CELL_GAP;
-        const gridH = rows * CELL_FACE + Math.max(0, rows - 1) * CELL_GAP;
 
-        const panelW = Math.min(maxOuterW, gridW + PANEL_PAD_X * 2);
-        const viewH = Math.min(gridH, Math.max(200, maxOuterH - TITLE_AREA - FOOTER_AREA - 16));
+        const contentH = this._computeDeckContentHeight(sections, cols);
+        const viewH = Math.min(contentH, Math.max(200, maxOuterH - TITLE_AREA - FOOTER_AREA - 16));
         const panelH = Math.min(maxOuterH, TITLE_AREA + viewH + FOOTER_AREA);
 
-        const panel = this._mkPanelShell(panelW, panelH);
-
-        if (!this._opts.panelBg) {
-            addCenterFillRect(panel, panelW, panelH, C_PANEL);
-        } else {
-            const sp = panel.addComponent(Sprite);
-            sp.spriteFrame = this._opts.panelBg;
-            sp.sizeMode = Sprite.SizeMode.CUSTOM;
-            sp.color = Color.WHITE;
-        }
+        const panel = mkDialogPanelShell(this.node, panelW, panelH);
+        const contentW = panelW - PANEL_PAD_X * 2;
+        const bgOpts = { bgHeightExtra: DECK_BG_TEXTURE_STRETCH_H };
+        applyDialogPanelBackground(panel, panelW, panelH, this._opts.panelBg, bgOpts);
+        this.scheduleOnce(() => {
+            if (!panel.isValid) return;
+            refreshDialogPanelBackgroundSize(panel, panelW, panelH, this._opts.panelBg, bgOpts);
+        }, 0);
 
         const titleN = new Node('Title');
         titleN.setParent(panel);
         titleN.setPosition(0, panelH / 2 - 36, 0);
         titleN.addComponent(UITransform).setContentSize(panelW - 24, 40);
         const title = titleN.addComponent(Label);
-        title.string = `配置卡组（至少选择 ${MIN_DECK_TYPE_COUNT} 种）`;
+        title.string = '配置卡组';
         title.fontSize = 26;
         title.color = C_ACCENT;
         title.horizontalAlign = Label.HorizontalAlign.CENTER;
         title.verticalAlign = Label.VerticalAlign.CENTER;
+        applyLabelBlackOutline(title);
 
         const footY = -panelH / 2 + 56;
         const topGridY = panelH / 2 - TITLE_AREA;
@@ -198,7 +265,7 @@ export class DeckSelectDialog extends Component {
         const scrollRoot = new Node('GridScroll');
         scrollRoot.setParent(panel);
         scrollRoot.setPosition(0, scrollCenterY, 0);
-        const viewW = panelW - PANEL_PAD_X * 2;
+        const viewW = contentW;
         const sUt = scrollRoot.addComponent(UITransform);
         sUt.setContentSize(viewW, viewH);
 
@@ -212,7 +279,7 @@ export class DeckSelectDialog extends Component {
         const content = new Node('content');
         content.setParent(viewNode);
         const cUt = content.addComponent(UITransform);
-        cUt.setContentSize(gridW, gridH);
+        cUt.setContentSize(innerW, contentH);
 
         const scroll = scrollRoot.addComponent(ScrollView);
         scroll.horizontal = false;
@@ -221,63 +288,9 @@ export class DeckSelectDialog extends Component {
         scroll.elastic = true;
         scroll.bounceDuration = 0.2;
 
-        const cell = CELL_FACE;
-        const gap = CELL_GAP;
-        const originX = -(((cols * cell + (cols - 1) * gap) >> 1) - cell / 2);
-        const originY = gridH / 2 - cell / 2 - 4;
-
-        let idx = 0;
-        for (const id of available) {
-            const sf = faces[id - 1];
-            if (sf == null) continue;
-
-            const col = idx % cols;
-            const row = Math.floor(idx / cols);
-            const bx = originX + col * (cell + gap);
-            const by = originY - row * (cell + gap);
-            idx++;
-
-            const cellRoot = new Node(`T${id}`);
-            cellRoot.setParent(content);
-            cellRoot.setPosition(bx, by, 0);
-            cellRoot.addComponent(UITransform).setContentSize(cell, cell);
-
-            const faceN = new Node('Face');
-            faceN.setParent(cellRoot);
-            const r = sf.rect;
-            const uw = Math.max(1, r.width);
-            const uh = Math.max(1, r.height);
-            faceN.addComponent(UITransform).setContentSize(uw, uh);
-            const fsp = faceN.addComponent(Sprite);
-            fsp.spriteFrame = sf;
-            fsp.sizeMode = Sprite.SizeMode.TRIMMED;
-            const s = Math.min(CELL_FACE / uw, CELL_FACE / uh);
-            faceN.setScale(s, s, 1);
-            fsp.color = Color.WHITE;
-
-            const border = new Node('Border');
-            border.setParent(cellRoot);
-            border.setSiblingIndex(0);
-            const bUt = border.addComponent(UITransform);
-            bUt.setContentSize(cell, cell);
-            const g = border.addComponent(Graphics);
-
-            const drawSel = (on: boolean) => {
-                g.clear();
-                g.lineWidth = on ? 4 : 2;
-                g.strokeColor = on ? C_ACCENT : new Color(0x41, 0x5a, 0x77, 200);
-                g.roundRect(-CELL_FACE / 2, -CELL_FACE / 2, CELL_FACE, CELL_FACE, 8);
-                g.stroke();
-            };
-            drawSel(this._selected.has(id));
-
-            cellRoot.addComponent(Button);
-            cellRoot.on(Button.EventType.CLICK, () => {
-                if (this._selected.has(id)) this._selected.delete(id);
-                else this._selected.add(id);
-                drawSel(this._selected.has(id));
-                this._refreshFooter();
-            }, this);
+        let yCursor = contentH / 2 - DECK_CONTENT_TOP_PAD;
+        for (const sec of sections) {
+            yCursor = this._mkDeckGroup(content, innerW, yCursor, sec, cols, shopOn);
         }
 
         scroll.scrollToTop(0);
@@ -292,79 +305,232 @@ export class DeckSelectDialog extends Component {
         this._countLabel.horizontalAlign = Label.HorizontalAlign.CENTER;
         this._countLabel.verticalAlign = Label.VerticalAlign.CENTER;
 
-        const ok = this._mkTextButton(panel, -110, footY - 8, '确定', C_BTN, () => {
-            if (this._selected.size < MIN_DECK_TYPE_COUNT) return;
-            const ids = [...this._selected].sort((a, b) => a - b);
-            saveDeckTypeIds(ids);
-            this._opts.onSaved?.(ids);
-            this._close();
-        });
-        this._okBtnNode = ok;
-        this._okGraphics = ok.getComponent(Graphics);
+        this._okBtn = mkDialogActionButton(
+            panel,
+            -110,
+            footY - 28,
+            'ok',
+            '确定',
+            this._opts.actionButtons,
+            () => {
+                if (!isDeckSelectionValid(this._selectionCount())) return;
+                if (shopOn && shopGroups.length > 0) {
+                    const keys = [...this._selectedShopKeys];
+                    saveDeckShopKeys(keys);
+                    const ids = deckShopKeysToTypeIds(keys, shopGroups);
+                    this._opts.onSaved?.(ids);
+                } else {
+                    const ids = [...this._selectedIds].sort((a, b) => a - b);
+                    saveDeckTypeIds(ids);
+                    this._opts.onSaved?.(ids);
+                }
+                this._close();
+            },
+            this,
+        );
 
-        this._mkTextButton(panel, 110, footY - 8, '取消', new Color(0x41, 0x5a, 0x77, 255), () => this._close());
+        mkDialogActionButton(
+            panel,
+            110,
+            footY - 28,
+            'cancel',
+            '取消',
+            this._opts.actionButtons,
+            () => this._close(),
+            this,
+        );
 
         this._refreshFooter();
     }
 
-    private _mkPanelShell(panelW: number, panelH: number): Node {
-        const panel = new Node('Panel');
-        panel.setParent(this.node);
-        const pUt = panel.addComponent(UITransform);
-        pUt.setContentSize(panelW, panelH);
-        panel.addComponent(Widget);
-        const pWg = panel.getComponent(Widget)!;
-        pWg.isAlignHorizontalCenter = true;
-        pWg.isAlignVerticalCenter = true;
-        pWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        pWg.updateAlignment();
-        return panel;
+    private _buildDeckSections(
+        shopOn: boolean,
+        shopGroups: ShopCatalogGroup[],
+        gridItems: DeckGridItem[],
+        faces: Array<SpriteFrame | null>,
+    ): DeckSection[] {
+        if (shopGroups.length === 0) {
+            return [{ title: '方块类型', items: gridItems }];
+        }
+        const sections: DeckSection[] = [];
+        if (shopOn) {
+            const byKey = new Map(gridItems.map((it) => [String(it.key), it]));
+            for (const g of shopGroups) {
+                const items: DeckGridItem[] = [];
+                for (const it of g.items) {
+                    const found = byKey.get(it.shopKey);
+                    if (found) items.push(found);
+                }
+                if (items.length > 0) sections.push({ title: g.title, items });
+            }
+        } else {
+            const assigned = new Set<string | number>();
+            for (const g of shopGroups) {
+                const items: DeckGridItem[] = [];
+                for (const item of gridItems) {
+                    if (assigned.has(item.key)) continue;
+                    const id = Number(item.key);
+                    const face = faces[id - 1];
+                    const inGroup = g.items.some((it) => it.sprite === face || it.sprite === item.sf);
+                    if (inGroup) {
+                        items.push(item);
+                        assigned.add(item.key);
+                    }
+                }
+                if (items.length > 0) sections.push({ title: g.title, items });
+            }
+            const rest = gridItems.filter((it) => !assigned.has(it.key));
+            if (rest.length > 0) sections.push({ title: '其他', items: rest });
+        }
+        return sections.length > 0 ? sections : [{ title: '方块类型', items: gridItems }];
     }
 
-    private _mkTextButton(
+    private _deckGridH(rows: number): number {
+        return rows * CELL_FACE + Math.max(0, rows - 1) * CELL_GAP;
+    }
+
+    private _computeDeckContentHeight(sections: DeckSection[], cols: number): number {
+        let h = DECK_CONTENT_TOP_PAD;
+        for (const sec of sections) {
+            const rows = Math.max(1, Math.ceil(sec.items.length / cols));
+            h += DECK_GROUP_TITLE_H + this._deckGridH(rows) + DECK_GROUP_SECTION_GAP;
+        }
+        return h;
+    }
+
+    private _mkDeckGroup(
         parent: Node,
-        x: number,
-        y: number,
-        text: string,
-        fill: Color,
-        onClick: () => void,
-    ): Node {
-        const n = new Node(`Btn_${text}`);
-        n.setParent(parent);
-        n.setPosition(x, y, 0);
-        const w = 160;
-        const h = 48;
-        n.addComponent(UITransform).setContentSize(w, h);
-        addCenterFillRect(n, w, h, fill);
-        const btn = n.addComponent(Button);
-        btn.transition = Button.Transition.NONE;
-        const labN = new Node('Label');
-        labN.setParent(n);
-        labN.addComponent(UITransform).setContentSize(w, h);
-        const lab = labN.addComponent(Label);
-        lab.string = text;
-        lab.fontSize = 22;
-        lab.color = Color.WHITE;
-        lab.horizontalAlign = Label.HorizontalAlign.CENTER;
-        lab.verticalAlign = Label.VerticalAlign.CENTER;
-        n.on(Button.EventType.CLICK, onClick, this);
-        return n;
+        innerW: number,
+        topY: number,
+        section: DeckSection,
+        cols: number,
+        shopOn: boolean,
+    ): number {
+        const titleN = new Node(`Title_${section.title}`);
+        titleN.setParent(parent);
+        titleN.setPosition(0, topY - DECK_GROUP_TITLE_H / 2, 0);
+        titleN.addComponent(UITransform).setContentSize(innerW, DECK_GROUP_TITLE_H);
+        const tl = titleN.addComponent(Label);
+        tl.string = section.title;
+        tl.fontSize = 20;
+        tl.color = C_ACCENT;
+        tl.horizontalAlign = Label.HorizontalAlign.CENTER;
+        tl.verticalAlign = Label.VerticalAlign.CENTER;
+        applyLabelBlackOutline(tl);
+
+        const rows = Math.max(1, Math.ceil(section.items.length / cols));
+        const gridH = this._deckGridH(rows);
+        const gridW = cols * CELL_FACE + Math.max(0, cols - 1) * CELL_GAP;
+
+        const grid = new Node(`Grid_${section.title}`);
+        grid.setParent(parent);
+        grid.setPosition(0, topY - DECK_GROUP_TITLE_H - gridH / 2 - 4, 0);
+        grid.addComponent(UITransform).setContentSize(gridW, gridH);
+
+        const originX = -gridW / 2 + CELL_FACE / 2;
+        const originY = gridH / 2 - CELL_FACE / 2;
+
+        section.items.forEach((item, idx) => {
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            const bx = originX + col * (CELL_FACE + CELL_GAP);
+            const by = originY - row * (CELL_FACE + CELL_GAP);
+            this._mkDeckCell(grid, bx, by, item, shopOn);
+        });
+
+        return topY - DECK_GROUP_TITLE_H - gridH - DECK_GROUP_SECTION_GAP;
+    }
+
+    private _mkDeckCell(parent: Node, bx: number, by: number, item: DeckGridItem, shopOn: boolean) {
+        const cellRoot = new Node(`T_${item.key}`);
+        cellRoot.setParent(parent);
+        cellRoot.setPosition(bx, by, 0);
+        cellRoot.addComponent(UITransform).setContentSize(CELL_FACE, CELL_FACE);
+
+        const faceN = new Node('Face');
+        faceN.setParent(cellRoot);
+        const r = item.sf.rect;
+        const uw = Math.max(1, r.width);
+        const uh = Math.max(1, r.height);
+        faceN.addComponent(UITransform).setContentSize(uw, uh);
+        const fsp = faceN.addComponent(Sprite);
+        fsp.spriteFrame = item.sf;
+        fsp.sizeMode = Sprite.SizeMode.TRIMMED;
+        const faceBaseScale = Math.min(CELL_FACE / uw, CELL_FACE / uh);
+
+        const border = new Node('Border');
+        border.setParent(cellRoot);
+        border.setSiblingIndex(0);
+        border.addComponent(UITransform).setContentSize(CELL_FACE, CELL_FACE);
+        const g = border.addComponent(Graphics);
+
+        const isSelected = () =>
+            shopOn ? this._selectedShopKeys.has(String(item.key)) : this._selectedIds.has(Number(item.key));
+
+        const drawSel = (on: boolean) => {
+            const half = CELL_FACE / 2;
+            const r = 8;
+            g.clear();
+            if (on) {
+                const pad = 3;
+                g.fillColor = C_DECK_SEL_GLOW;
+                g.roundRect(-half + pad, -half + pad, CELL_FACE - pad * 2, CELL_FACE - pad * 2, r - 2);
+                g.fill();
+                g.lineWidth = DECK_SEL_BORDER_W;
+                g.strokeColor = C_DECK_SEL_BORDER;
+                g.roundRect(-half, -half, CELL_FACE, CELL_FACE, r);
+                g.stroke();
+                const inset = 5;
+                g.lineWidth = 2;
+                g.strokeColor = C_DECK_SEL_INNER;
+                g.roundRect(-half + inset, -half + inset, CELL_FACE - inset * 2, CELL_FACE - inset * 2, r - 3);
+                g.stroke();
+                const fs = faceBaseScale * DECK_SEL_FACE_SCALE;
+                faceN.setScale(fs, fs, 1);
+                fsp.color = C_DECK_SEL_FACE;
+            } else {
+                g.lineWidth = DECK_UNSEL_BORDER_W;
+                g.strokeColor = C_DECK_CELL_BORDER;
+                g.roundRect(-half, -half, CELL_FACE, CELL_FACE, r);
+                g.stroke();
+                faceN.setScale(faceBaseScale, faceBaseScale, 1);
+                fsp.color = Color.WHITE;
+            }
+        };
+        drawSel(isSelected());
+
+        cellRoot.addComponent(Button);
+        cellRoot.on(Button.EventType.CLICK, () => {
+            if (shopOn) {
+                const k = String(item.key);
+                if (this._selectedShopKeys.has(k)) this._selectedShopKeys.delete(k);
+                else {
+                    if (this._selectedShopKeys.size >= MAX_DECK_TYPE_COUNT) return;
+                    this._selectedShopKeys.add(k);
+                }
+            } else {
+                const id = Number(item.key);
+                if (this._selectedIds.has(id)) this._selectedIds.delete(id);
+                else {
+                    if (this._selectedIds.size >= MAX_DECK_TYPE_COUNT) return;
+                    this._selectedIds.add(id);
+                }
+            }
+            drawSel(isSelected());
+            this._refreshFooter();
+        }, this);
     }
 
     private _refreshFooter() {
-        const n = this._selected.size;
+        const n = this._selectionCount();
         if (this._countLabel) {
-            this._countLabel.string = `已选 ${n} 种（至少 ${MIN_DECK_TYPE_COUNT} 种）`;
-            this._countLabel.color =
-                n >= MIN_DECK_TYPE_COUNT ? new Color(0xa8, 0xd5, 0xba, 255) : new Color(0xff, 0xb4, 0xa2, 255);
+            this._countLabel.string = `已选 ${n} 种（${MIN_DECK_TYPE_COUNT}～${MAX_DECK_TYPE_COUNT} 种）`;
+            this._countLabel.color = isDeckSelectionValid(n)
+                ? new Color(0xa8, 0xd5, 0xba, 255)
+                : new Color(0xff, 0xb4, 0xa2, 255);
         }
-        const ok = this._okBtnNode;
-        if (ok && this._okGraphics) {
-            const g = this._okGraphics;
-            g.clear();
-            const fill = n >= MIN_DECK_TYPE_COUNT ? C_BTN : C_BTN_DISABLED;
-            g.fillColor = fill;
-            g.fillRect(-80, -24, 160, 48);
+        if (this._okBtn) {
+            setDialogOkEnabled(this._okBtn, isDeckSelectionValid(n));
         }
     }
 }
