@@ -93,6 +93,13 @@ export type ShopPropIcons = {
     eliminate: SpriteFrame | null;
 };
 
+/** 商店内「购买」按钮与「已拥有」标签贴图（由 GameApp 注入；未配置则用纯色底 + 文字） */
+export type ShopButtonSprites = {
+    buyNormal: SpriteFrame | null;
+    buyPressed: SpriteFrame | null;
+    owned: SpriteFrame | null;
+};
+
 export class ShopDialog extends Component {
     static open(
         parent: Node,
@@ -102,6 +109,7 @@ export class ShopDialog extends Component {
             actionButtons?: DialogActionButtonSprites | null;
             coinIcon: SpriteFrame | null;
             propIcons: ShopPropIcons;
+            shopButtons?: ShopButtonSprites | null;
             onCoinsChanged?: (coins: number) => void;
             onClose?: () => void;
         },
@@ -128,6 +136,7 @@ export class ShopDialog extends Component {
         actionButtons: DialogActionButtonSprites | null;
         coinIcon: SpriteFrame | null;
         propIcons: ShopPropIcons;
+        shopButtons: ShopButtonSprites | null;
         onCoinsChanged?: (coins: number) => void;
         onClose?: () => void;
     };
@@ -142,13 +151,18 @@ export class ShopDialog extends Component {
             actionButtons?: DialogActionButtonSprites | null;
             coinIcon: SpriteFrame | null;
             propIcons: ShopPropIcons;
+            shopButtons?: ShopButtonSprites | null;
             onCoinsChanged?: (coins: number) => void;
             onClose?: () => void;
         },
         pw: number,
         ph: number,
     ) {
-        this._opts = { ...opts, actionButtons: opts.actionButtons ?? null };
+        this._opts = {
+            ...opts,
+            actionButtons: opts.actionButtons ?? null,
+            shopButtons: opts.shopButtons ?? null,
+        };
         this._build(pw, ph);
     }
 
@@ -203,6 +217,106 @@ export class ShopDialog extends Component {
             },
             this,
         );
+    }
+
+    /**
+     * 在 maxW×maxH 框内按比例显示贴图（不强行铺满，与改前 Graphics 按钮视觉一致）。
+     * 返回承载 Sprite 的子节点，供按下态换图。
+     */
+    private _addShopSpriteVisual(parent: Node, maxW: number, maxH: number, sf: SpriteFrame): Node {
+        let vis = parent.getChildByName('Vis');
+        if (!vis) {
+            vis = new Node('Vis');
+            vis.setParent(parent);
+        }
+        vis.setPosition(0, 0, 0);
+        vis.setScale(1, 1, 1);
+        const r = sf.rect;
+        const uw = Math.max(1, r.width);
+        const uh = Math.max(1, r.height);
+        const s = Math.min(maxW / uw, maxH / uh);
+        const ut = vis.getComponent(UITransform) ?? vis.addComponent(UITransform);
+        ut.setContentSize(uw, uh);
+        vis.setScale(s, s, 1);
+        const sp = vis.getComponent(Sprite) ?? vis.addComponent(Sprite);
+        sp.spriteFrame = sf;
+        sp.sizeMode = Sprite.SizeMode.TRIMMED;
+        sp.color = Color.WHITE;
+        return vis;
+    }
+
+    private _mountBuySpriteButton(node: Node, w: number, h: number, sfNormal: SpriteFrame, sfPressed: SpriteFrame | null) {
+        const vis = this._addShopSpriteVisual(node, w, h, sfNormal);
+        const sp = vis.getComponent(Sprite)!;
+        const pressSf = sfPressed ?? sfNormal;
+        const toNormal = () => {
+            if (sp.isValid) sp.spriteFrame = sfNormal;
+        };
+        const toPress = () => {
+            if (sp.isValid) sp.spriteFrame = pressSf;
+        };
+        node.on(Node.EventType.TOUCH_START, toPress, node);
+        node.on(Node.EventType.TOUCH_END, toNormal, node);
+        node.on(Node.EventType.TOUCH_CANCEL, toNormal, node);
+    }
+
+    /** 购买按钮：有贴图则用图（含按下态），否则绿底 +「购买」 */
+    private _mkBuyButton(parent: Node, y: number, w: number, h: number, onClick: () => void): Node {
+        const btnN = new Node('Buy');
+        btnN.setParent(parent);
+        btnN.setPosition(0, y, 0);
+        btnN.addComponent(UITransform).setContentSize(w, h);
+
+        const sprites = this._opts.shopButtons;
+        const buySf = sprites?.buyNormal ?? null;
+        if (buySf) {
+            this._mountBuySpriteButton(btnN, w, h, buySf, sprites?.buyPressed ?? null);
+            const btn = btnN.addComponent(Button);
+            btn.transition = Button.Transition.NONE;
+            btnN.on(Button.EventType.CLICK, onClick, this);
+        } else {
+            const bgN = new Node('Bg');
+            bgN.setParent(btnN);
+            addCenterFillRect(bgN, w, h, C_BTN);
+            const blN = new Node('Label');
+            blN.setParent(btnN);
+            blN.addComponent(UITransform).setContentSize(w, h);
+            const bl = blN.addComponent(Label);
+            bl.string = '购买';
+            bl.fontSize = w >= 90 ? 18 : 14;
+            bl.color = Color.WHITE;
+            bl.horizontalAlign = Label.HorizontalAlign.CENTER;
+            bl.verticalAlign = Label.VerticalAlign.CENTER;
+            this._bindClick(btnN, w, h, onClick);
+        }
+        return btnN;
+    }
+
+    /** 已拥有标签：有贴图则用图，否则灰底 +「已拥有」 */
+    private _mkOwnedBadge(parent: Node, y: number, w = 76, h = BLOCK_BTN_H): Node {
+        const btnN = new Node('Owned');
+        btnN.setParent(parent);
+        btnN.setPosition(0, y, 0);
+        btnN.addComponent(UITransform).setContentSize(w, h);
+
+        const ownedSf = this._opts.shopButtons?.owned ?? null;
+        if (ownedSf) {
+            this._addShopSpriteVisual(btnN, w, h, ownedSf);
+        } else {
+            const bgN = new Node('Bg');
+            bgN.setParent(btnN);
+            addCenterFillRect(bgN, w, h, C_BTN_OWNED);
+            const blN = new Node('Label');
+            blN.setParent(btnN);
+            blN.addComponent(UITransform).setContentSize(w, h);
+            const bl = blN.addComponent(Label);
+            bl.string = '已拥有';
+            bl.fontSize = 14;
+            bl.color = new Color(0xc8, 0xd0, 0xd8, 255);
+            bl.horizontalAlign = Label.HorizontalAlign.CENTER;
+            bl.verticalAlign = Label.VerticalAlign.CENTER;
+        }
+        return btnN;
     }
 
     private _build(pw: number, ph: number) {
@@ -427,21 +541,7 @@ export class ShopDialog extends Component {
             sl.color = new Color(0xa8, 0xd5, 0xba, 255);
             sl.horizontalAlign = Label.HorizontalAlign.CENTER;
 
-            const btnN = new Node('Buy');
-            btnN.setParent(cell);
-            btnN.setPosition(0, -88 - PROP_STOCK_TO_BTN_GAP, 0);
-            const bgN = new Node('Bg');
-            bgN.setParent(btnN);
-            addCenterFillRect(bgN, 100, 36, C_BTN);
-            const blN = new Node('Label');
-            blN.setParent(btnN);
-            const bl = blN.addComponent(Label);
-            bl.string = '购买';
-            bl.fontSize = 18;
-            bl.color = Color.WHITE;
-            bl.horizontalAlign = Label.HorizontalAlign.CENTER;
-            bl.verticalAlign = Label.VerticalAlign.CENTER;
-            this._bindClick(btnN, 100, 36, () => {
+            this._mkBuyButton(cell, -88 - PROP_STOCK_TO_BTN_GAP, 100, 36, () => {
                 if (purchaseProp(p.kind)) {
                     sl.string = `拥有 ${loadPropCounts()[p.kind]}`;
                     this._notifyCoins();
@@ -528,58 +628,26 @@ export class ShopDialog extends Component {
             const owned = isShopBlockOwned(item.shopKey);
 
             if (owned) {
-                this._mkOwnedButton(cell, btnY);
+                this._mkOwnedBadge(cell, btnY);
             } else {
-                const btnN = new Node('Buy');
-                btnN.setParent(cell);
-                btnN.setPosition(0, btnY, 0);
-                const bgN = new Node('Bg');
-                bgN.setParent(btnN);
-                addCenterFillRect(bgN, 76, BLOCK_BTN_H, C_BTN);
-                const blN = new Node('Label');
-                blN.setParent(btnN);
-                const bl = blN.addComponent(Label);
-                bl.string = '购买';
-                bl.fontSize = 14;
-                bl.color = Color.WHITE;
-                bl.horizontalAlign = Label.HorizontalAlign.CENTER;
-                bl.verticalAlign = Label.VerticalAlign.CENTER;
-                this._bindClick(btnN, 76, BLOCK_BTN_H, () => {
+                const btnN = this._mkBuyButton(cell, btnY, 76, BLOCK_BTN_H, () => {
                     const result = purchaseShopBlock(item.shopKey);
                     if (result === 'success') {
                         btnN.destroy();
-                        this._mkOwnedButton(cell, btnY);
+                        this._mkOwnedBadge(cell, btnY);
                         this._notifyCoins();
                         this._showToast('购买成功');
                     } else if (result === 'insufficient_coins') {
                         this._showToast(`金币不足，需要 ${item.price} 金币`);
                     } else if (result === 'already_owned') {
                         btnN.destroy();
-                        this._mkOwnedButton(cell, btnY);
+                        this._mkOwnedBadge(cell, btnY);
                     }
                 });
             }
         });
 
         return topY - GROUP_TITLE_H - gridH - GROUP_SECTION_GAP;
-    }
-
-    private _mkOwnedButton(parent: Node, y: number) {
-        const btnN = new Node('Owned');
-        btnN.setParent(parent);
-        btnN.setPosition(0, y, 0);
-        const bgN = new Node('Bg');
-        bgN.setParent(btnN);
-        addCenterFillRect(bgN, 76, BLOCK_BTN_H, C_BTN_OWNED);
-        const blN = new Node('Label');
-        blN.setParent(btnN);
-        const bl = blN.addComponent(Label);
-        bl.string = '已拥有';
-        bl.fontSize = 14;
-        bl.color = new Color(0xc8, 0xd0, 0xd8, 255);
-        bl.horizontalAlign = Label.HorizontalAlign.CENTER;
-        bl.verticalAlign = Label.VerticalAlign.CENTER;
-        btnN.addComponent(UITransform).setContentSize(76, BLOCK_BTN_H);
     }
 
 }

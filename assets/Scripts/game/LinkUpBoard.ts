@@ -19,6 +19,7 @@ import {
     math,
     resources,
     tween,
+    Tween,
 } from 'cc';
 import { LinkUpPathFinder } from './LinkUpPathFinder';
 import { MIN_DECK_TYPE_COUNT } from '../util/DeckSelectionStorage';
@@ -50,6 +51,13 @@ const COLOR_CELL_FACE = new Color(0x3a, 0x4d, 0x6e, 255);
 /** 发牌：逐格间隔（秒）；单格落子动画时长 */
 const DEAL_INTERVAL = 0.014;
 const DEAL_DROP_DURATION = 0.07;
+/** 选中：瞬时放大再缩回 */
+const SELECT_PULSE_SCALE = 1.06;
+const SELECT_PULSE_UP = 0.05;
+const SELECT_PULSE_DOWN = 0.07;
+/** 同类型但无法连线：轻微左右晃 */
+const SHAKE_OFFSET = 5;
+const SHAKE_STEP = 0.035;
 
 /** 扩展盘外圈映射到本地坐标时，向棋盘内侧拉拢的比例（越大越贴棋盘，越不易伸出画面外） */
 const EDGE_LINE_PULL = 0.32;
@@ -85,6 +93,8 @@ export class LinkUpBoard extends Component {
     onWin: ((connectCount: number) => void) | null = null;
     /** 成功连线并消除一对时，由 GameView 注入以播放音效 */
     onConnectSfx: (() => void) | null = null;
+    /** 选中方块时，由 GameView 注入以播放音效 */
+    onSelectSfx: (() => void) | null = null;
     /** 场上无可连对时由 GameView 弹提示并刷新；未注入则直接 shuffleAll */
     onNoConnectablePair: (() => void) | null = null;
     /** 动态发牌全部落子完成后 */
@@ -861,14 +871,47 @@ export class LinkUpBoard extends Component {
         }
     }
 
+    private _selectCell(r: number, c: number) {
+        this._sel = { r, c };
+        this._applySelectionTint();
+        this.onSelectSfx?.();
+        this._playCellSelectPulse(r, c);
+    }
+
+    private _playCellSelectPulse(r: number, c: number) {
+        const n = this._cells[r][c];
+        if (!n?.isValid) return;
+        Tween.stopAllByTarget(n);
+        n.setScale(1, 1, 1);
+        const peak = SELECT_PULSE_SCALE;
+        tween(n)
+            .to(SELECT_PULSE_UP, { scale: new Vec3(peak, peak, 1) }, { easing: easing.sineOut })
+            .to(SELECT_PULSE_DOWN, { scale: new Vec3(1, 1, 1) }, { easing: easing.sineIn })
+            .start();
+    }
+
+    private _playCellShake(r: number, c: number) {
+        const n = this._cells[r][c];
+        if (!n?.isValid) return;
+        const base = this._cellLocalPosition(r, c);
+        n.setPosition(base);
+        const dx = SHAKE_OFFSET;
+        const step = SHAKE_STEP;
+        tween(n)
+            .to(step, { position: new Vec3(base.x + dx, base.y, base.z) })
+            .to(step, { position: new Vec3(base.x - dx, base.y, base.z) })
+            .to(step, { position: new Vec3(base.x + dx * 0.6, base.y, base.z) })
+            .to(step, { position: base })
+            .start();
+    }
+
     private _onCellTap(r: number, c: number) {
         if (this._dealing) return;
         const v = this.grid[r][c];
         if (v == null) return;
 
         if (!this._sel) {
-            this._sel = { r, c };
-            this._applySelectionTint();
+            this._selectCell(r, c);
             return;
         }
         if (this._sel.r === r && this._sel.c === c) {
@@ -880,8 +923,7 @@ export class LinkUpBoard extends Component {
         const c0 = this._sel.c;
         const v0 = this.grid[r0][c0];
         if (v0 !== v) {
-            this._sel = { r, c };
-            this._applySelectionTint();
+            this._selectCell(r, c);
             return;
         }
         if (LinkUpPathFinder.canConnect(this.grid, r0, c0, r, c)) {
@@ -895,8 +937,9 @@ export class LinkUpBoard extends Component {
             this._syncCellVisual(r, c);
             this._afterChange();
         } else {
-            this._sel = { r, c };
-            this._applySelectionTint();
+            this._playCellShake(r0, c0);
+            this._playCellShake(r, c);
+            this._selectCell(r, c);
         }
     }
 

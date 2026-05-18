@@ -94,6 +94,9 @@ export class GameApp extends Component {
     /** 连线成功消除一对时播放（可选） */
     @property(AudioClip)
     sfxConnect: AudioClip | null = null;
+    /** 选中棋盘方块时播放（可选） */
+    @property(AudioClip)
+    sfxSelect: AudioClip | null = null;
     /** 点击「提示」 */
     @property(AudioClip)
     sfxHint: AudioClip | null = null;
@@ -154,6 +157,15 @@ export class GameApp extends Component {
     dialogBtnCloseNormal: SpriteFrame | null = null;
     @property(SpriteFrame)
     dialogBtnClosePressed: SpriteFrame | null = null;
+
+    /** 商店内「购买」按钮（普通 / 按下） */
+    @property(SpriteFrame)
+    shopBtnBuyNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    shopBtnBuyPressed: SpriteFrame | null = null;
+    /** 商店内「已拥有」标签贴图 */
+    @property(SpriteFrame)
+    shopBtnOwnedLabel: SpriteFrame | null = null;
 
     /** 金币图标（首页与商店内展示） */
     @property(SpriteFrame)
@@ -262,6 +274,7 @@ export class GameApp extends Component {
             this._game.setGameBackground(this.gameBackground);
             const sfx: GameSfxConfig = {
                 connect: this.sfxConnect,
+                select: this.sfxSelect,
                 hint: this.sfxHint,
                 refresh: this.sfxRefresh,
                 eliminate: this.sfxEliminate,
@@ -486,6 +499,11 @@ export class GameApp extends Component {
                 hint: this.toolBtnHintNormal,
                 refresh: this.toolBtnRefreshNormal,
                 eliminate: this.toolBtnEliminateNormal,
+            },
+            shopButtons: {
+                buyNormal: this.shopBtnBuyNormal,
+                buyPressed: this.shopBtnBuyPressed,
+                owned: this.shopBtnOwnedLabel,
             },
             onCoinsChanged: () => this._refreshHomeCoins(),
         });

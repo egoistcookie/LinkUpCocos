@@ -52,6 +52,7 @@ export type NoConnectDialogConfig = {
 /** 游戏页音效：由 GameApp 注入；未配置则不播放 */
 export type GameSfxConfig = {
     connect: AudioClip | null;
+    select: AudioClip | null;
     hint: AudioClip | null;
     refresh: AudioClip | null;
     eliminate: AudioClip | null;
@@ -251,7 +252,8 @@ export class GameView extends Component {
 
     /** 连线成功 / 底栏工具音效，由 GameApp 注入 */
     setGameSfx(sfx: GameSfxConfig | null) {
-        this._sfx = sfx && (sfx.connect || sfx.hint || sfx.refresh || sfx.eliminate) ? { ...sfx } : null;
+        this._sfx =
+            sfx && (sfx.connect || sfx.select || sfx.hint || sfx.refresh || sfx.eliminate) ? { ...sfx } : null;
         this._wireBoardCallbacks();
     }
 
@@ -690,6 +692,9 @@ export class GameView extends Component {
         if (!this._board) return;
         this._board.onConnectSfx = () => {
             this._playSfx(this._sfx?.connect);
+        };
+        this._board.onSelectSfx = () => {
+            this._playSfx(this._sfx?.select);
         };
         this._board.onNoConnectablePair = this._noConnectCfg
             ? () => {

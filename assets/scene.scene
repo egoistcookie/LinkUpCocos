@@ -459,6 +459,10 @@
       "__uuid__": "ee7deb7e-543e-4ed7-98a4-c3353fda72dc",
       "__expectedType__": "cc.AudioClip"
     },
+    "sfxSelect": {
+      "__uuid__": "fcfe5937-903b-48f6-8853-ea260522edf6",
+      "__expectedType__": "cc.AudioClip"
+    },
     "sfxHint": null,
     "sfxRefresh": null,
     "sfxEliminate": null,
@@ -520,6 +524,18 @@
     },
     "dialogBtnClosePressed": {
       "__uuid__": "34655775-f86e-459f-a2be-4e0c1735c134@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
+    "shopBtnBuyNormal": {
+      "__uuid__": "4dd0a380-c48d-4655-b980-8e1f9fbc7ae0@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
+    "shopBtnBuyPressed": {
+      "__uuid__": "a308fd4f-5058-4350-aa62-c8f2c0cb27a9@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
+    "shopBtnOwnedLabel": {
+      "__uuid__": "62e670b9-c78e-4505-8536-ddaf62fb0754@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "coinIcon": {
