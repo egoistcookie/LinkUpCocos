@@ -14,7 +14,11 @@ import {
     UITransform,
     Widget,
 } from 'cc';
-import { LinkUpBoard } from './LinkUpBoard';
+import { getLevelEnterTip, LinkUpBoard } from './LinkUpBoard';
+import {
+    openLevelClearOverlay,
+    type LevelClearDialogConfig,
+} from './LevelClearOverlay';
 import { getStableVisibleSize } from '../util/ViewSize';
 import { consumeProp, type PropKind } from '../util/PlayerResourceStorage';
 
@@ -30,12 +34,6 @@ export type GameToolButtonSprites = {
     refreshPressed: SpriteFrame | null;
     eliminateNormal: SpriteFrame | null;
     eliminatePressed: SpriteFrame | null;
-};
-
-/** 通关金币奖励弹窗（由 GameApp 配置） */
-export type CoinRewardDialogConfig = {
-    panelBg: SpriteFrame | null;
-    coinIcon: SpriteFrame | null;
 };
 
 /** 无可连对时的提示（由 GameApp 配置） */
@@ -143,12 +141,15 @@ export class GameView extends Component {
     private _audioSource: AudioSource | null = null;
     private _noConnectCfg: NoConnectDialogConfig | null = null;
     private _noConnectTimerGen = 0;
-    private _coinRewardCfg: CoinRewardDialogConfig | null = null;
+    private _levelClearCfg: LevelClearDialogConfig | null = null;
+    private _levelClearCloser: (() => void) | null = null;
 
     /** GameApp 注入的卡组类型子集（≥30）；无贴图模式时为 null */
     private _deckTypeIds: number[] | null = null;
     /** 是否启用商店道具库存（购买后消耗） */
     private _shopPropsEnabled = false;
+    /** GameApp 测试模式：道具不扣次数 */
+    private _testMode = false;
 
     onBack: (() => void) | null = null;
     /** 关卡通关：参数为本关连线次数（由 GameApp 结算并弹窗） */
@@ -176,10 +177,10 @@ export class GameView extends Component {
     }
 
     beginOrRestartLevel(level: number) {
-        this._level = level;
+        this._level = Math.max(1, Math.floor(level));
         if (this._levelLabel) this._levelLabel.string = `第 ${this._level} 关`;
         if (!this._board) {
-            this._pendingStartLevel = level;
+            this._pendingStartLevel = this._level;
             return;
         }
         this._buildLevelGen++;
@@ -191,11 +192,14 @@ export class GameView extends Component {
     }
 
     private _runBuildLevel(board: LinkUpBoard) {
+        const level = this._level;
         const prevOnDeal = board.onDealComplete;
         board.onDealComplete = () => {
             board.resizeToParent();
             prevOnDeal?.();
+            this._showLevelEnterTip(level);
         };
+        board.setLevel(level);
         board.buildLevel();
     }
 
@@ -217,6 +221,10 @@ export class GameView extends Component {
 
     setShopPropsEnabled(enabled: boolean) {
         this._shopPropsEnabled = enabled;
+    }
+
+    setTestMode(enabled: boolean) {
+        this._testMode = enabled;
     }
 
     private _applyDeckToBoard() {
@@ -263,139 +271,38 @@ export class GameView extends Component {
         this._wireBoardCallbacks();
     }
 
-    /** 通关金币奖励弹窗样式，由 GameApp 注入 */
-    setCoinRewardDialog(cfg: CoinRewardDialogConfig | null) {
-        this._coinRewardCfg = cfg ? { ...cfg } : null;
+    /** 通关结算弹窗（背景、庆祝帧、按钮贴图由 GameApp 注入） */
+    setLevelClearDialog(cfg: LevelClearDialogConfig | null) {
+        this._levelClearCfg = cfg ? { ...cfg, animFrames: [...(cfg.animFrames ?? [])] } : null;
     }
 
-    /** 通关奖励提示（点击继续后执行 onContinue） */
-    openCoinRewardOverlay(coinAmount: number, onContinue: () => void) {
-        const cfg = this._coinRewardCfg;
-        const root = this.node;
-        const prev = root.getChildByName('CoinRewardOverlay');
-        prev?.destroy();
+    closeLevelClearOverlay() {
+        this._levelClearCloser?.();
+        this._levelClearCloser = null;
+    }
 
-        const { w, h } = gameRootFullSize(root);
-        const layer = new Node('CoinRewardOverlay');
-        layer.setParent(root);
-        layer.setSiblingIndex(root.children.length - 1);
-        const layerUt = layer.addComponent(UITransform);
-        layerUt.setContentSize(w, h);
-        const layerWg = layer.addComponent(Widget);
-        layerWg.isAlignTop = layerWg.isAlignBottom = layerWg.isAlignLeft = layerWg.isAlignRight = true;
-        layerWg.top = layerWg.bottom = layerWg.left = layerWg.right = 0;
-        layerWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        layerWg.updateAlignment();
+    /** 通关结算：上半屏循环动画 + 居中弹窗；点击按钮后关闭并回调 */
+    openLevelClearOverlay(
+        level: number,
+        coinAmount: number,
+        onHome: () => void,
+        onNext: () => void,
+    ) {
+        this.closeLevelClearOverlay();
+        const passSfx = this._levelClearPassSfx;
+        if (passSfx) this._playSfx(passSfx);
+        this._levelClearCloser = openLevelClearOverlay(
+            this.node,
+            this._levelClearCfg,
+            { level, coinAmount, onHome, onNext },
+            this,
+        );
+    }
 
-        const dim = new Node('Dim');
-        dim.setParent(layer);
-        dim.addComponent(UITransform).setContentSize(w, h);
-        const dimWg = dim.addComponent(Widget);
-        dimWg.isAlignTop = dimWg.isAlignBottom = dimWg.isAlignLeft = dimWg.isAlignRight = true;
-        dimWg.top = dimWg.bottom = dimWg.left = dimWg.right = 0;
-        dimWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        dimWg.updateAlignment();
-        const dimG = dim.addComponent(Graphics);
-        dimG.fillColor = new Color(0, 0, 0, 160);
-        dimG.fillRect(-w / 2, -h / 2, w, h);
+    private _levelClearPassSfx: AudioClip | null = null;
 
-        const panelW = Math.min(480, w - 48);
-        const panelH = 200;
-        const panel = new Node('Panel');
-        panel.setParent(layer);
-        panel.addComponent(UITransform).setContentSize(panelW, panelH);
-        const pWg = panel.addComponent(Widget);
-        pWg.isAlignHorizontalCenter = true;
-        pWg.isAlignVerticalCenter = true;
-        pWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        pWg.updateAlignment();
-
-        if (cfg?.panelBg) {
-            const sp = panel.addComponent(Sprite);
-            sp.spriteFrame = cfg.panelBg;
-            sp.sizeMode = Sprite.SizeMode.CUSTOM;
-            sp.color = Color.WHITE;
-        } else {
-            const pg = panel.addComponent(Graphics);
-            pg.fillColor = new Color(0x12, 0x1e, 0x2e, 245);
-            pg.fillRect(-panelW / 2, -panelH / 2, panelW, panelH);
-        }
-
-        const titleN = new Node('Title');
-        titleN.setParent(panel);
-        titleN.setPosition(0, 52, 0);
-        titleN.addComponent(UITransform).setContentSize(panelW - 32, 36);
-        const tl = titleN.addComponent(Label);
-        tl.string = '通关奖励';
-        tl.fontSize = 26;
-        tl.color = new Color(0xe9, 0xc4, 0x6a, 255);
-        tl.horizontalAlign = Label.HorizontalAlign.CENTER;
-        tl.verticalAlign = Label.VerticalAlign.CENTER;
-        this._applyLabelOutline(tl);
-
-        const rowY = 4;
-        if (cfg?.coinIcon) {
-            const iconN = new Node('CoinIcon');
-            iconN.setParent(panel);
-            iconN.setPosition(-56, rowY, 0);
-            const r = cfg.coinIcon.rect;
-            const uw = Math.max(1, r.width);
-            const uh = Math.max(1, r.height);
-            iconN.addComponent(UITransform).setContentSize(uw, uh);
-            const isp = iconN.addComponent(Sprite);
-            isp.spriteFrame = cfg.coinIcon;
-            isp.sizeMode = Sprite.SizeMode.TRIMMED;
-            const s = Math.min(40 / uw, 40 / uh);
-            iconN.setScale(s, s, 1);
-        }
-
-        const amtN = new Node('Amount');
-        amtN.setParent(panel);
-        amtN.setPosition(cfg?.coinIcon ? 12 : 0, rowY, 0);
-        amtN.addComponent(UITransform).setContentSize(panelW - 48, 44);
-        const al = amtN.addComponent(Label);
-        al.string = `+${coinAmount} 金币`;
-        al.fontSize = 28;
-        al.color = new Color(0xe9, 0xc4, 0x6a, 255);
-        al.horizontalAlign = Label.HorizontalAlign.CENTER;
-        al.verticalAlign = Label.VerticalAlign.CENTER;
-        this._applyLabelOutline(al);
-
-        const subN = new Node('Sub');
-        subN.setParent(panel);
-        subN.setPosition(0, -36, 0);
-        subN.addComponent(UITransform).setContentSize(panelW - 40, 28);
-        const sl = subN.addComponent(Label);
-        sl.string = `本关连线 ${coinAmount} 次`;
-        sl.fontSize = 18;
-        sl.color = new Color(0xe0, 0xe1, 0xdd, 255);
-        sl.horizontalAlign = Label.HorizontalAlign.CENTER;
-        sl.verticalAlign = Label.VerticalAlign.CENTER;
-
-        const btnN = new Node('Continue');
-        btnN.setParent(panel);
-        btnN.setPosition(0, -72, 0);
-        btnN.addComponent(UITransform).setContentSize(160, 44);
-        const bg = btnN.addComponent(Graphics);
-        bg.fillColor = new Color(0x2d, 0x6a, 0x4f, 255);
-        bg.fillRect(-80, -22, 160, 44);
-        const btn = btnN.addComponent(Button);
-        btn.transition = Button.Transition.NONE;
-        const blN = new Node('Label');
-        blN.setParent(btnN);
-        blN.addComponent(UITransform).setContentSize(160, 44);
-        const bl = blN.addComponent(Label);
-        bl.string = '继续';
-        bl.fontSize = 22;
-        bl.color = Color.WHITE;
-        bl.horizontalAlign = Label.HorizontalAlign.CENTER;
-        bl.verticalAlign = Label.VerticalAlign.CENTER;
-
-        const close = () => {
-            if (layer.isValid) layer.destroy();
-            onContinue();
-        };
-        btnN.on(Button.EventType.CLICK, close, this);
+    setLevelClearPassSfx(clip: AudioClip | null) {
+        this._levelClearPassSfx = clip;
     }
 
     private _applyLabelOutline(lab: Label) {
@@ -650,32 +557,40 @@ export class GameView extends Component {
     }
 
     private _tryUseProp(kind: PropKind): boolean {
-        if (!this._shopPropsEnabled) return true;
+        if (!this._shopPropsEnabled || this._testMode) return true;
         if (consumeProp(kind)) return true;
         const names = { hint: '提示', refresh: '刷新', eliminate: '消除' };
         this._showGameToast(`无${names[kind]}道具，请前往商店购买（50 金币）`);
         return false;
     }
 
-    private _showGameToast(message: string) {
+    private _showLevelEnterTip(level: number) {
+        if (level < 2) return;
+        const rule = getLevelEnterTip(level);
+        if (!rule) return;
+        this._showGameToast(rule, 3.2, 'LevelEnterToast');
+    }
+
+    private _showGameToast(message: string, duration = 2, nodeName = 'GameToast') {
         const root = this.node;
-        const old = root.getChildByName('GameToast');
+        const old = root.getChildByName(nodeName);
         if (old?.isValid) old.destroy();
-        const t = new Node('GameToast');
+        const t = new Node(nodeName);
         t.setParent(root);
         t.setSiblingIndex(root.children.length - 1);
         const tw = Math.min(520, getStableVisibleSize().width - 48);
-        t.addComponent(UITransform).setContentSize(tw, 100);
+        const boxH = message.includes('\n') ? 118 : 100;
+        t.addComponent(UITransform).setContentSize(tw, boxH);
         const w = t.addComponent(Widget);
         w.isAlignTop = true;
         w.isAlignHorizontalCenter = true;
         w.top = 100;
         w.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
         w.updateAlignment();
-        addCenterFillRect(t, tw, 88, new Color(0x0d, 0x1b, 0x2a, 230));
+        addCenterFillRect(t, tw, boxH - 12, new Color(0x0d, 0x1b, 0x2a, 230));
         const labN = new Node('Msg');
         labN.setParent(t);
-        labN.addComponent(UITransform).setContentSize(tw - 24, 72);
+        labN.addComponent(UITransform).setContentSize(tw - 24, boxH - 28);
         const lab = labN.addComponent(Label);
         lab.string = message;
         lab.fontSize = 20;
@@ -685,7 +600,7 @@ export class GameView extends Component {
         lab.overflow = Label.Overflow.RESIZE_HEIGHT;
         this.scheduleOnce(() => {
             if (t.isValid) t.destroy();
-        }, 2);
+        }, duration);
     }
 
     private _wireBoardCallbacks() {
@@ -710,6 +625,7 @@ export class GameView extends Component {
             return;
         }
         const root = this.node;
+        if (root.getChildByName('NoConnectOverlay')?.isValid) return;
         const prev = root.getChildByName('NoConnectOverlay');
         prev?.destroy();
 

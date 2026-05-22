@@ -466,6 +466,10 @@
     "sfxHint": null,
     "sfxRefresh": null,
     "sfxEliminate": null,
+    "sfxLevelClear": null,
+    "levelClearPanelBg": null,
+    "levelClearAnimFrames": [],
+    "levelClearAnimFps": 12,
     "noConnectDialogMessage": "场上没有可连线方块，自动刷新",
     "noConnectDialogTitle": "",
     "noConnectDialogAutoDelay": 1.2,
@@ -542,6 +546,7 @@
       "__uuid__": "cc2b0336-ffb0-4452-898b-6ee9ca49bfab@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
+    "testMode": true,
     "shopLandAnimalSprites": [
       {
         "__uuid__": "11f9f785-c99c-4c0a-b081-d7a3227069fd@f9941",

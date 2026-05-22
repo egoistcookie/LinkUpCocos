@@ -34,6 +34,22 @@ export const TYPE_COUNT = 40;
 /** App 上可配置的棋盘格子贴图槽位数：第 n 项对应「n 号类型」（与格子数字一致） */
 export const TILE_SPRITE_SLOTS = 40;
 
+/** 进入关卡时的机制说明（第 1 关无；未配置的关卡返回 null） */
+export function getLevelEnterTip(level: number): string | null {
+    switch (Math.max(1, Math.floor(level))) {
+        case 2:
+            return '方块消除后，同行剩余方块会向左靠齐';
+        case 3:
+            return '方块消除后，同行剩余方块会向右靠齐';
+        case 4:
+            return '方块消除后，同列剩余方块会向上靠齐';
+        case 5:
+            return '方块消除后，同列剩余方块会向下靠齐';
+        default:
+            return null;
+    }
+}
+
 const COLOR_SEL = new Color(0xe9, 0xc4, 0x6a, 255);
 const COLOR_HINT = new Color(0xe9, 0xc4, 0x6a, 255);
 /** 金线仅显示该时长后擦除；星星动画仍用 STAR_BURST_DURATION */
@@ -58,6 +74,13 @@ const SELECT_PULSE_DOWN = 0.07;
 /** 同类型但无法连线：轻微左右晃 */
 const SHAKE_OFFSET = 5;
 const SHAKE_STEP = 0.035;
+/** 双击同一格判定间隔（毫秒） */
+const DOUBLE_CLICK_MS = 300;
+/** 第 2–5 关消除后方块靠齐动画时长（略慢 + backOut 轻微回弹） */
+const GRAVITY_MOVE_DURATION = 0.32;
+
+type GravityDir = 'left' | 'right' | 'up' | 'down';
+type GravityMove = { fromR: number; fromC: number; toR: number; toC: number };
 
 /** 扩展盘外圈映射到本地坐标时，向棋盘内侧拉拢的比例（越大越贴棋盘，越不易伸出画面外） */
 const EDGE_LINE_PULL = 0.32;
@@ -68,6 +91,7 @@ export class LinkUpBoard extends Component {
     /** 每个格子根节点（含 Label/Button）；空位时 active=false */
     private _cells: (Node | null)[][] = [];
     private _sel: { r: number; c: number } | null = null;
+    private _lastTap: { r: number; c: number; time: number } | null = null;
     private _cellSize = { w: 64, h: 64 };
     private _hintCells: Array<{ r: number; c: number; oldLab: Color | null; oldSpr: Color | null }> = [];
     private _lineNode: Node | null = null;
@@ -89,6 +113,9 @@ export class LinkUpBoard extends Component {
 
     /** 本关累计成功连线次数（通关时用于金币奖励） */
     private _levelConnectCount = 0;
+    /** 当前关卡（由 GameView 在 buildLevel 前注入） */
+    private _level = 1;
+    private _gravityAnimGen = 0;
 
     onWin: ((connectCount: number) => void) | null = null;
     /** 成功连线并消除一对时，由 GameView 注入以播放音效 */
@@ -200,6 +227,14 @@ export class LinkUpBoard extends Component {
 
     private _cellImg(n: Node): Sprite | null {
         return n.getChildByName('Face')?.getChildByName('Img')?.getComponent(Sprite) ?? null;
+    }
+
+    setLevel(level: number) {
+        this._level = Math.max(1, Math.floor(level));
+    }
+
+    getLevel(): number {
+        return this._level;
     }
 
     buildLevel() {
@@ -564,6 +599,94 @@ export class LinkUpBoard extends Component {
         return bag;
     }
 
+    private _typePoolForBag(): number[] {
+        if (this._activeTypeIds.length > 0) return [...this._activeTypeIds];
+        return Array.from({ length: TYPE_COUNT }, (_, i) => i + 1);
+    }
+
+    /** 为场上 n 个格子生成类型 multiset（用于重排失败后换类型） */
+    private _buildBagForCellCount(cellCount: number): number[] {
+        if (cellCount <= 0) return [];
+        if (cellCount === 1) return [this._typePoolForBag()[0] ?? 1];
+        if (cellCount === 2) {
+            const id = this._typePoolForBag()[0] ?? 1;
+            return [id, id];
+        }
+
+        const pool = this._typePoolForBag();
+        this._shuffle(pool);
+
+        for (let m = Math.min(pool.length, Math.floor(cellCount / 2)); m >= 1; m--) {
+            const types = pool.slice(0, m);
+            const counts = this._evenTileCountsPerSlot(m, cellCount);
+            if (counts) return this._bagFromTypeCounts(types, counts);
+        }
+
+        if (cellCount % 2 === 1) {
+            const even = this._buildBagForCellCount(cellCount - 1);
+            if (even.length === cellCount - 1) {
+                even.push(even[Math.floor(Math.random() * even.length)] ?? pool[0] ?? 1);
+                return even;
+            }
+        }
+
+        const bag: number[] = [];
+        while (bag.length + 2 <= cellCount) {
+            const id = pool[Math.floor(Math.random() * pool.length)] ?? 1;
+            bag.push(id, id);
+        }
+        while (bag.length < cellCount) {
+            bag.push(pool[0] ?? 1);
+        }
+        return bag.slice(0, cellCount);
+    }
+
+    private _occupiedCells(): Array<{ r: number; c: number }> {
+        const occ: Array<{ r: number; c: number }> = [];
+        for (let r = 0; r < BOARD_ROWS; r++) {
+            for (let c = 0; c < BOARD_COLS; c++) {
+                if (this.grid[r][c] != null) occ.push({ r, c });
+            }
+        }
+        return occ;
+    }
+
+    private _syncAllCellVisuals() {
+        this._sel = null;
+        for (let r = 0; r < BOARD_ROWS; r++) {
+            for (let c = 0; c < BOARD_COLS; c++) {
+                this._syncCellVisual(r, c);
+            }
+        }
+        this._applySelectionTint();
+    }
+
+    /**
+     * 保持空格不变，为在场方块重新分配类型并随机落位，直到存在可连对或用尽次数。
+     */
+    private _regenerateOccupiedTypes(maxTry: number): boolean {
+        const occ = this._occupiedCells();
+        const n = occ.length;
+        if (n < 2) return false;
+
+        for (let t = 0; t < maxTry; t++) {
+            const bag = this._buildBagForCellCount(n);
+            if (bag.length !== n) continue;
+            this._shuffle(bag);
+            const slots = [...occ];
+            this._shuffle(slots);
+            for (let i = 0; i < n; i++) {
+                this.grid[slots[i].r][slots[i].c] = bag[i];
+            }
+            if (this.hasAnyConnectablePair()) {
+                this._syncAllCellVisuals();
+                return true;
+            }
+        }
+        linkWarn('LinkUpBoard', '_regenerateOccupiedTypes: failed', { n, maxTry });
+        return false;
+    }
+
     private _fillRandomSolvable() {
         const maxTry = 80;
         for (let t = 0; t < maxTry; t++) {
@@ -606,6 +729,7 @@ export class LinkUpBoard extends Component {
 
     private _stopDealing() {
         this._dealSessionId++;
+        this._lastTap = null;
         this._dealing = false;
         this._dealPhase = null;
         this._dealAccum = 0;
@@ -905,10 +1029,36 @@ export class LinkUpBoard extends Component {
             .start();
     }
 
+    /** 双击：场上所有同类型方块一齐摇晃（与无法连线时的晃动一致） */
+    private _playShakeForType(typeId: number) {
+        for (let r = 0; r < BOARD_ROWS; r++) {
+            for (let c = 0; c < BOARD_COLS; c++) {
+                if (this.grid[r][c] === typeId) this._playCellShake(r, c);
+            }
+        }
+    }
+
     private _onCellTap(r: number, c: number) {
         if (this._dealing) return;
         const v = this.grid[r][c];
         if (v == null) return;
+
+        const now = Date.now();
+        if (
+            this._lastTap &&
+            this._lastTap.r === r &&
+            this._lastTap.c === c &&
+            now - this._lastTap.time <= DOUBLE_CLICK_MS
+        ) {
+            this._lastTap = null;
+            if (this._sel?.r === r && this._sel.c === c) {
+                this._sel = null;
+                this._applySelectionTint();
+            }
+            this._playShakeForType(v);
+            return;
+        }
+        this._lastTap = { r, c, time: now };
 
         if (!this._sel) {
             this._selectCell(r, c);
@@ -952,7 +1102,121 @@ export class LinkUpBoard extends Component {
         return true;
     }
 
+    private _gravityDirForLevel(): GravityDir | null {
+        switch (this._level) {
+            case 2:
+                return 'left';
+            case 3:
+                return 'right';
+            case 4:
+                return 'up';
+            case 5:
+                return 'down';
+            default:
+                return null;
+        }
+    }
+
+    private _computeGravity(
+        dir: GravityDir,
+    ): { grid: (number | null)[][]; moves: GravityMove[] } {
+        const next: (number | null)[][] = [];
+        const moves: GravityMove[] = [];
+        for (let r = 0; r < BOARD_ROWS; r++) {
+            next[r] = [];
+            for (let c = 0; c < BOARD_COLS; c++) next[r][c] = null;
+        }
+
+        if (dir === 'left' || dir === 'right') {
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                const items: Array<{ c: number; v: number }> = [];
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    const v = this.grid[r][c];
+                    if (v != null) items.push({ c, v });
+                }
+                for (let i = 0; i < items.length; i++) {
+                    const newC = dir === 'left' ? i : BOARD_COLS - items.length + i;
+                    const oldC = items[i].c;
+                    next[r][newC] = items[i].v;
+                    if (oldC !== newC) {
+                        moves.push({ fromR: r, fromC: oldC, toR: r, toC: newC });
+                    }
+                }
+            }
+        } else {
+            for (let c = 0; c < BOARD_COLS; c++) {
+                const items: Array<{ r: number; v: number }> = [];
+                for (let r = 0; r < BOARD_ROWS; r++) {
+                    const v = this.grid[r][c];
+                    if (v != null) items.push({ r, v });
+                }
+                for (let i = 0; i < items.length; i++) {
+                    const newR = dir === 'up' ? i : BOARD_ROWS - items.length + i;
+                    const oldR = items[i].r;
+                    next[newR][c] = items[i].v;
+                    if (oldR !== newR) {
+                        moves.push({ fromR: oldR, fromC: c, toR: newR, toC: c });
+                    }
+                }
+            }
+        }
+        return { grid: next, moves };
+    }
+
+    private _applyGravityWithAnimation(onDone: () => void): boolean {
+        const dir = this._gravityDirForLevel();
+        if (!dir) {
+            onDone();
+            return false;
+        }
+        const { grid: next, moves } = this._computeGravity(dir);
+        if (moves.length === 0) {
+            onDone();
+            return false;
+        }
+        this.grid = next;
+        for (let r = 0; r < BOARD_ROWS; r++) {
+            for (let c = 0; c < BOARD_COLS; c++) {
+                this._syncCellVisual(r, c);
+            }
+        }
+        this._gravityAnimGen++;
+        const gen = this._gravityAnimGen;
+        let pending = 0;
+        const finishOne = () => {
+            pending--;
+            if (pending <= 0 && gen === this._gravityAnimGen && this.isValid) {
+                for (let r = 0; r < BOARD_ROWS; r++) {
+                    for (let c = 0; c < BOARD_COLS; c++) {
+                        const n = this._cells[r][c];
+                        if (n?.isValid) n.setPosition(this._cellLocalPosition(r, c));
+                    }
+                }
+                onDone();
+            }
+        };
+        for (const m of moves) {
+            const n = this._cells[m.toR][m.toC];
+            if (!n?.isValid || !n.active) continue;
+            const fromPos = this._cellLocalPosition(m.fromR, m.fromC);
+            const toPos = this._cellLocalPosition(m.toR, m.toC);
+            n.setPosition(fromPos);
+            pending++;
+            Tween.stopAllByTarget(n);
+            tween(n)
+                .to(GRAVITY_MOVE_DURATION, { position: toPos }, { easing: easing.backOut })
+                .call(finishOne)
+                .start();
+        }
+        if (pending === 0) onDone();
+        return true;
+    }
+
     private _afterChange() {
+        this._applyGravityWithAnimation(() => this._afterChangeCore());
+    }
+
+    private _afterChangeCore() {
         if (this._isEmpty()) {
             this.onWin?.(this._levelConnectCount);
             return;
@@ -1055,16 +1319,12 @@ export class LinkUpBoard extends Component {
                 break;
             }
         }
-        this._sel = null;
-        for (let r = 0; r < BOARD_ROWS; r++) {
-            for (let c = 0; c < BOARD_COLS; c++) {
-                this._syncCellVisual(r, c);
+        if (ensurePair && !this._isEmpty() && !this.hasAnyConnectablePair()) {
+            if (this._regenerateOccupiedTypes(80)) {
+                return;
             }
         }
-        this._applySelectionTint();
-        if (ensurePair && !this._isEmpty() && !this.hasAnyConnectablePair()) {
-            this.scheduleOnce(() => this._invokeNoConnectOrShuffle(), 0);
-        }
+        this._syncAllCellVisuals();
     }
 
     removeTwoRandomTiles() {

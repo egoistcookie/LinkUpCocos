@@ -1,6 +1,7 @@
 import { sys } from 'cc';
 
 const COINS_KEY = 'linkup_v1_coins';
+const CURRENT_LEVEL_KEY = 'linkup_v1_current_level';
 const PURCHASED_SHOP_KEYS = 'linkup_v1_purchased_shop_keys';
 const PROPS_KEY = 'linkup_v1_props';
 const SHOP_DEFAULTS_KEY = 'linkup_v1_shop_defaults_applied';
@@ -30,6 +31,15 @@ function writeJson(key: string, value: unknown): void {
     } catch {
         /* 忽略 */
     }
+}
+
+export function loadCurrentLevel(): number {
+    const n = Number(readJson<number | string>(CURRENT_LEVEL_KEY, 1));
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
+export function saveCurrentLevel(level: number): void {
+    writeJson(CURRENT_LEVEL_KEY, Math.max(1, Math.floor(level)));
 }
 
 export function loadCoins(): number {

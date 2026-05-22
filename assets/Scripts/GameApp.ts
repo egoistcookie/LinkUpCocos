@@ -16,11 +16,11 @@ import {
 } from 'cc';
 import {
     GameView,
-    type CoinRewardDialogConfig,
     type GameSfxConfig,
     type GameToolButtonSprites,
     type NoConnectDialogConfig,
 } from './game/GameView';
+import type { LevelClearDialogConfig } from './game/LevelClearOverlay';
 import { HomeView, type HomeMainButtonSprites } from './game/HomeView';
 import { DeckSelectDialog } from './game/DeckSelectDialog';
 import { ShopDialog } from './game/ShopDialog';
@@ -33,7 +33,13 @@ import {
     MAX_DECK_TYPE_COUNT,
     MIN_DECK_TYPE_COUNT,
 } from './util/DeckSelectionStorage';
-import { addCoins, ensureDefaultShopOwnership, loadCoins } from './util/PlayerResourceStorage';
+import {
+    addCoins,
+    ensureDefaultShopOwnership,
+    loadCoins,
+    loadCurrentLevel,
+    saveCurrentLevel,
+} from './util/PlayerResourceStorage';
 import {
     buildShopCatalog,
     buildTileFacesFromDeckKeys,
@@ -106,6 +112,21 @@ export class GameApp extends Component {
     /** 点击「消除」 */
     @property(AudioClip)
     sfxEliminate: AudioClip | null = null;
+    /** 通关结算弹窗出现时播放（可选） */
+    @property(AudioClip)
+    sfxLevelClear: AudioClip | null = null;
+
+    /** 通关结算弹窗底板图；不配置则用深色纯色块 */
+    @property(SpriteFrame)
+    levelClearPanelBg: SpriteFrame | null = null;
+    /**
+     * 通关庆祝动画帧：在结算弹窗下层、画面上半区循环播放；
+     * 点击「返回首页」或「下一关」后停止。
+     */
+    @property({ type: [SpriteFrame], tooltip: '通关结算上半屏循环动画帧（按顺序播放）' })
+    levelClearAnimFrames: SpriteFrame[] = [];
+    @property({ tooltip: '庆祝动画帧率（帧/秒）' })
+    levelClearAnimFps = 12;
 
     /** 场上无可连对时弹窗主文案 */
     @property
@@ -170,6 +191,12 @@ export class GameApp extends Component {
     /** 金币图标（首页与商店内展示） */
     @property(SpriteFrame)
     coinIcon: SpriteFrame | null = null;
+
+    /** 测试模式：开启后游戏内提示/刷新/消除道具不消耗库存，可无限使用 */
+    @property({
+        tooltip: '开启后游戏内提示、刷新、消除道具不扣次数，可无限使用',
+    })
+    testMode = false;
 
     /** 商店：陆地动物方块（配置多少种展示多少种，每种 10 金币） */
     @property({ type: [SpriteFrame], tooltip: '陆地动物方块贴图列表' })
@@ -257,7 +284,7 @@ export class GameApp extends Component {
         if (this._game) {
             this._game.onBack = () => this._onGameBack();
             this._game.onLevelWin = (count) => this._onLevelWin(count);
-            this._game.setShopPropsEnabled(this._shopEnabled);
+            this._syncGameModeFlags();
             this._game.setTileFaceSprites(this._getTileFacesForGame());
             this._syncDeckToGameView();
             const toolBtns: GameToolButtonSprites = {
@@ -287,11 +314,7 @@ export class GameApp extends Component {
                 panelBg: this.noConnectDialogPanelBg,
             };
             this._game.setNoConnectDialog(noConnect);
-            const coinReward: CoinRewardDialogConfig = {
-                panelBg: this.noConnectDialogPanelBg,
-                coinIcon: this.coinIcon,
-            };
-            this._game.setCoinRewardDialog(coinReward);
+            this._applyLevelClearDialog();
         }
         this._refreshHomeCoins();
         this.scheduleOnce(() => this._debugPipelineSnapshot('GameApp.start+0'), 0);
@@ -312,6 +335,19 @@ export class GameApp extends Component {
         if (this._shopEnabled) {
             ensureDefaultShopOwnership(getDefaultOwnedShopKeys(this._shopGroups));
         }
+    }
+
+    private _applyLevelClearDialog() {
+        if (!this._game) return;
+        const cfg: LevelClearDialogConfig = {
+            panelBg: this.levelClearPanelBg,
+            coinIcon: this.coinIcon,
+            animFrames: this.levelClearAnimFrames ?? [],
+            animFps: Math.max(1, this.levelClearAnimFps),
+            actionButtons: this._getDialogActionButtons(),
+        };
+        this._game.setLevelClearDialog(cfg);
+        this._game.setLevelClearPassSfx(this.sfxLevelClear);
     }
 
     private _getDialogActionButtons(): DialogActionButtonSprites {
@@ -340,7 +376,13 @@ export class GameApp extends Component {
     }
 
     /** 退出游戏：静默结算本关未发放的金币（无弹窗） */
+    private _syncGameModeFlags() {
+        this._game?.setShopPropsEnabled(this._shopEnabled);
+        this._game?.setTestMode(this.testMode);
+    }
+
     private _onGameBack() {
+        this._game?.closeLevelClearOverlay();
         const pending = this._game?.takePendingConnectCoins() ?? 0;
         if (pending > 0) {
             addCoins(pending);
@@ -348,18 +390,22 @@ export class GameApp extends Component {
         this._enterHome();
     }
 
-    /** 关卡通关：结算金币并弹出奖励提示，确认后进入下一关 */
+    /** 关卡通关：发放金币并打开结算页 */
     private _onLevelWin(connectCount: number) {
         const level = this._game?.getLevel() ?? 1;
+        const nextLevel = level + 1;
+        saveCurrentLevel(nextLevel);
         if (connectCount > 0) {
             addCoins(connectCount);
             this._refreshHomeCoins();
-            this._game?.openCoinRewardOverlay(connectCount, () => {
-                this._game?.beginOrRestartLevel(level + 1);
-            });
-        } else {
-            this._game?.beginOrRestartLevel(level + 1);
         }
+        this._applyLevelClearDialog();
+        this._game?.openLevelClearOverlay(
+            level,
+            connectCount,
+            () => this._enterHome(),
+            () => this._game?.beginOrRestartLevel(nextLevel),
+        );
     }
 
     /** 首帧后打一次：摄像机、App、开始按钮、layer 与 visibility */
@@ -515,11 +561,12 @@ export class GameApp extends Component {
         if (this._game) {
             this._game.onBack = () => this._onGameBack();
             this._game.onLevelWin = (count) => this._onLevelWin(count);
-            this._game.setShopPropsEnabled(this._shopEnabled);
+            this._syncGameModeFlags();
+            this._applyLevelClearDialog();
             this._game.setTileFaceSprites(this._getTileFacesForGame());
             this._syncDeckToGameView();
             this._game.node.active = true;
-            this._game.beginOrRestartLevel(1);
+            this._game.beginOrRestartLevel(loadCurrentLevel());
         }
     }
 
