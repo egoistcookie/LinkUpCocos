@@ -21,6 +21,7 @@ import {
 } from './LevelClearOverlay';
 import { getStableVisibleSize } from '../util/ViewSize';
 import { consumeProp, type PropKind } from '../util/PlayerResourceStorage';
+import { showFrameToast } from '../util/FrameToast';
 
 const { ccclass } = _decorator;
 
@@ -572,35 +573,14 @@ export class GameView extends Component {
     }
 
     private _showGameToast(message: string, duration = 2, nodeName = 'GameToast') {
-        const root = this.node;
-        const old = root.getChildByName(nodeName);
-        if (old?.isValid) old.destroy();
-        const t = new Node(nodeName);
-        t.setParent(root);
-        t.setSiblingIndex(root.children.length - 1);
-        const tw = Math.min(520, getStableVisibleSize().width - 48);
-        const boxH = message.includes('\n') ? 118 : 100;
-        t.addComponent(UITransform).setContentSize(tw, boxH);
-        const w = t.addComponent(Widget);
-        w.isAlignTop = true;
-        w.isAlignHorizontalCenter = true;
-        w.top = 100;
-        w.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        w.updateAlignment();
-        addCenterFillRect(t, tw, boxH - 12, new Color(0x0d, 0x1b, 0x2a, 230));
-        const labN = new Node('Msg');
-        labN.setParent(t);
-        labN.addComponent(UITransform).setContentSize(tw - 24, boxH - 28);
-        const lab = labN.addComponent(Label);
-        lab.string = message;
-        lab.fontSize = 20;
-        lab.color = Color.WHITE;
-        lab.horizontalAlign = Label.HorizontalAlign.CENTER;
-        lab.verticalAlign = Label.VerticalAlign.CENTER;
-        lab.overflow = Label.Overflow.RESIZE_HEIGHT;
-        this.scheduleOnce(() => {
-            if (t.isValid) t.destroy();
-        }, duration);
+        showFrameToast(this.node, this, message, {
+            duration,
+            nodeName,
+            placement: 'top',
+            topOffset: 100,
+            maxTextWidth: Math.min(520, getStableVisibleSize().width - 48),
+            compactHeight: !message.includes('\n') && message.length <= 14,
+        });
     }
 
     private _wireBoardCallbacks() {
@@ -660,56 +640,16 @@ export class GameView extends Component {
 
         const panelW = Math.min(520, w - 48);
         const hasTitle = !!(cfg.title && cfg.title.trim());
-        const panelH = hasTitle ? 150 : 120;
-        const panel = new Node('Panel');
-        panel.setParent(layer);
-        const pUt = panel.addComponent(UITransform);
-        pUt.setContentSize(panelW, panelH);
-        panel.setPosition(0, 0, 0);
-        const pWg = panel.addComponent(Widget);
-        pWg.isAlignHorizontalCenter = true;
-        pWg.isAlignVerticalCenter = true;
-        pWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        pWg.updateAlignment();
-
-        if (cfg.panelBg) {
-            const sp = panel.addComponent(Sprite);
-            sp.spriteFrame = cfg.panelBg;
-            sp.sizeMode = Sprite.SizeMode.CUSTOM;
-            sp.color = Color.WHITE;
-        } else {
-            const pg = panel.addComponent(Graphics);
-            pg.fillColor = new Color(0x12, 0x1e, 0x2e, 245);
-            pg.fillRect(-panelW / 2, -panelH / 2, panelW, panelH);
-        }
-
-        if (hasTitle) {
-            const titleN = new Node('Title');
-            titleN.setParent(panel);
-            titleN.addComponent(UITransform).setContentSize(panelW - 32, 36);
-            titleN.setPosition(0, 38, 0);
-            const tl = titleN.addComponent(Label);
-            tl.string = cfg.title.trim();
-            tl.fontSize = 22;
-            tl.color = new Color(0xff, 0xe0, 0xa0, 255);
-            tl.horizontalAlign = Label.HorizontalAlign.CENTER;
-            tl.verticalAlign = Label.VerticalAlign.CENTER;
-            tl.overflow = Label.Overflow.RESIZE_HEIGHT;
-        }
-
-        const msgN = new Node('Message');
-        msgN.setParent(panel);
-        msgN.addComponent(UITransform).setContentSize(panelW - 40, panelH - 24);
-        msgN.setPosition(0, hasTitle ? -8 : 0, 0);
-        const ml = msgN.addComponent(Label);
-        ml.string = cfg.message || '场上没有可连线方块，自动刷新';
-        ml.fontSize = 20;
-        ml.color = Color.WHITE;
-        ml.horizontalAlign = Label.HorizontalAlign.CENTER;
-        ml.verticalAlign = Label.VerticalAlign.CENTER;
-        ml.overflow = Label.Overflow.RESIZE_HEIGHT;
-
+        const body = cfg.message || '场上没有可连线方块，自动刷新';
+        const toastMsg = hasTitle ? `${cfg.title.trim()}\n${body}` : body;
         const delay = Math.max(0.25, cfg.autoDelay);
+        showFrameToast(layer, this, toastMsg, {
+            duration: delay,
+            nodeName: 'NoConnectToast',
+            placement: 'center',
+            maxTextWidth: panelW,
+            compactHeight: false,
+        });
         this.scheduleOnce(() => {
             if (myGen !== this._noConnectTimerGen) return;
             layer.destroy();

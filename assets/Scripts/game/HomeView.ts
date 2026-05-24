@@ -13,6 +13,7 @@ import {
     view,
 } from 'cc';
 import { getLayoutSizeForNode } from '../util/ViewSize';
+import { showFrameToast } from '../util/FrameToast';
 import { linkDumpNode, linkLog, nodePath } from '../util/LinkUpDebug';
 import { getWhiteSpriteFrame } from '../util/WhiteSpriteFrame';
 
@@ -23,6 +24,11 @@ const C_BTN = new Color(0x2d, 0x6a, 0x4f, 255);
 /** 开始游戏按钮贴图显示尺寸 */
 const START_BTN_W = 380;
 const START_BTN_H = 130;
+/** 卡组/商店：视觉尺寸外扩的可点区域（贴图边缘更好点） */
+const AUX_BTN_W = 200;
+const AUX_BTN_H = 72;
+const AUX_BTN_HIT_PAD_X = 24;
+const AUX_BTN_HIT_PAD_Y = 20;
 
 /** 首页主按钮贴图：由 GameApp 注入；未配置则用与项目样式一致的纯色底 + 文字 */
 export type HomeMainButtonSprites = {
@@ -58,7 +64,6 @@ export class HomeView extends Component {
     private _opts: HomeViewInitOptions | null = null;
     private _bgSprite: Sprite | null = null;
     private _configuredBg: SpriteFrame | null = null;
-    private _toastNode: Node | null = null;
     private _coinLabel: Label | null = null;
     private _coinIconSf: SpriteFrame | null = null;
 
@@ -73,35 +78,14 @@ export class HomeView extends Component {
 
     /** 短暂提示（如无法开始游戏） */
     showToast(message: string, duration = 2.4) {
-        if (this._toastNode?.isValid) this._toastNode.destroy();
-        const root = this.node;
-        const t = new Node('Toast');
-        t.setParent(root);
-        t.setSiblingIndex(root.children.length - 1);
-        const tw = Math.min(560, getLayoutSizeForNode(root).width - 48);
-        t.addComponent(UITransform).setContentSize(tw, 120);
-        const w = t.addComponent(Widget);
-        w.isAlignTop = true;
-        w.isAlignHorizontalCenter = true;
-        w.top = 120;
-        w.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        w.updateAlignment();
-        addCenterFillRect(t, tw, 100, new Color(0x0d, 0x1b, 0x2a, 230));
-        const labN = new Node('Msg');
-        labN.setParent(t);
-        labN.addComponent(UITransform).setContentSize(tw - 24, 88);
-        const lab = labN.addComponent(Label);
-        lab.string = message;
-        lab.fontSize = 22;
-        lab.color = Color.WHITE;
-        lab.horizontalAlign = Label.HorizontalAlign.CENTER;
-        lab.verticalAlign = Label.VerticalAlign.CENTER;
-        lab.overflow = Label.Overflow.RESIZE_HEIGHT;
-        this._toastNode = t;
-        this.scheduleOnce(() => {
-            if (t.isValid) t.destroy();
-            if (this._toastNode === t) this._toastNode = null;
-        }, duration);
+        showFrameToast(this.node, this, message, {
+            duration,
+            nodeName: 'Toast',
+            placement: 'top',
+            topOffset: 120,
+            maxTextWidth: Math.min(560, getLayoutSizeForNode(this.node).width - 48),
+            compactHeight: !message.includes('\n') && message.length <= 14,
+        });
     }
 
     /**
@@ -223,7 +207,7 @@ export class HomeView extends Component {
 
             const labN = new Node('CoinCount');
             labN.setParent(bar);
-            labN.setPosition(52, 0, 0);
+            labN.setPosition(55, 0, 0);
             labN.addComponent(UITransform).setContentSize(120, 36);
             this._coinLabel = labN.addComponent(Label);
             this._coinLabel.fontSize = 24;
@@ -245,7 +229,7 @@ export class HomeView extends Component {
             const iconN = bar.getChildByName('CoinIcon');
             if (iconN) iconN.setPosition(20, 0, 0);
             const labN = bar.getChildByName('CoinCount');
-            if (labN) labN.setPosition(52, 0, 0);
+            if (labN) labN.setPosition(55, 0, 0);
         }
         if (this._coinIconSf) {
             const iconN = bar.getChildByName('CoinIcon');
@@ -360,21 +344,30 @@ export class HomeView extends Component {
         normal: SpriteFrame | null,
         pressed: SpriteFrame | null,
         onClick: () => void,
+        hitPadX = 0,
+        hitPadY = 0,
     ): Node {
+        const hitW = width + hitPadX * 2;
+        const hitH = height + hitPadY * 2;
         const n = new Node(name);
         n.setParent(this.node);
-        n.addComponent(UITransform).setContentSize(width, height);
+        n.addComponent(UITransform).setContentSize(hitW, hitH);
+
+        const visual = new Node('Visual');
+        visual.setParent(n);
+        visual.addComponent(UITransform).setContentSize(width, height);
+
         const btn = n.addComponent(Button);
         btn.transition = Button.Transition.NONE;
-        btn.target = n;
+        btn.target = visual;
         if (!normal) {
-            addCenterFillRect(n, width, height, C_BTN);
+            addCenterFillRect(visual, width, height, C_BTN);
         } else {
-            n.addComponent(Sprite);
+            visual.addComponent(Sprite);
         }
-        this._mountSpriteButton(n, width, height, normal, pressed, btn);
+        this._mountSpriteButton(visual, width, height, normal, pressed, btn);
         const sLabN = new Node('Label');
-        sLabN.setParent(n);
+        sLabN.setParent(visual);
         const sLab = sLabN.addComponent(Label);
         sLab.string = labelText;
         sLab.color = Color.WHITE;
@@ -385,8 +378,13 @@ export class HomeView extends Component {
         sLabN.addComponent(UITransform).setContentSize(width, height);
         sLabN.active = !normal;
         n.on(Button.EventType.CLICK, () => {
+            if (!btn.interactable) return;
+            btn.interactable = false;
+            this.scheduleOnce(() => {
+                if (n.isValid) btn.interactable = true;
+            }, 0.35);
             linkLog('HomeView', `${name} CLICK`);
-            onClick();
+            this.scheduleOnce(() => onClick(), 0);
         }, this);
         return n;
     }
@@ -403,26 +401,28 @@ export class HomeView extends Component {
         w.updateAlignment();
 
         const sp = this._opts?.sprites;
-        const BW = 200;
-        const BH = 72;
 
         this._mkHomeButton(
             'BtnDeck',
             '配置卡组',
-            BW,
-            BH,
+            AUX_BTN_W,
+            AUX_BTN_H,
             sp?.deckNormal ?? null,
             sp?.deckPressed ?? null,
             () => this._opts?.onDeck?.(),
+            AUX_BTN_HIT_PAD_X,
+            AUX_BTN_HIT_PAD_Y,
         );
         this._mkHomeButton(
             'BtnShop',
             '商店',
-            BW,
-            BH,
+            AUX_BTN_W,
+            AUX_BTN_H,
             sp?.shopNormal ?? null,
             sp?.shopPressed ?? null,
             () => this._opts?.onShop?.(),
+            AUX_BTN_HIT_PAD_X,
+            AUX_BTN_HIT_PAD_Y,
         );
         this._mkHomeButton(
             'StartGame',

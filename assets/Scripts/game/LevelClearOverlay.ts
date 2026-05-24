@@ -14,23 +14,39 @@ import {
 } from 'cc';
 import {
     applyDialogPanelBackground,
-    applyLabelBlackOutline,
     mkDialogPanelShell,
 } from '../util/DialogPanelBg';
-import { mkDialogActionButton, type DialogActionButtonSprites } from '../util/DialogActionButtons';
 
 const { ccclass } = _decorator;
 
 const C_DIM = new Color(0, 0, 0, 160);
 const C_TITLE = new Color(0xe9, 0xc4, 0x6a, 255);
-const C_BODY = new Color(0xe0, 0xe1, 0xdd, 255);
+const C_BTN_HOME = new Color(0x41, 0x5a, 0x77, 255);
+const C_BTN_NEXT = new Color(0x2d, 0x6a, 0x4f, 255);
+/** 「本关连线」「次」暖棕色（略提亮） */
+const C_ROUND_TEXT = new Color(0x98, 0x75, 0x48, 255);
+/** 连线次数数字：灰绿色（略提亮） */
+const C_ROUND_NUM = new Color(0x82, 0xa8, 0x82, 255);
+const C_ROUND_OUTLINE = new Color(0x6a, 0x52, 0x38, 255);
+const ROUND_FONT_FAMILY = 'YouYuan, Yuanti SC, STYuanti-SC-Regular, PingFang SC, sans-serif';
+const ROUND_FONT_SIZE = 26;
+const ROUND_NUM_FONT_SIZE = 30;
+/** 「本关连线」四字之间的额外字距 */
+const ROUND_CHAR_GAP = 6;
+
+export type LevelClearButtonSprites = {
+    homeNormal: SpriteFrame | null;
+    homePressed: SpriteFrame | null;
+    nextNormal: SpriteFrame | null;
+    nextPressed: SpriteFrame | null;
+};
 
 export type LevelClearDialogConfig = {
     panelBg: SpriteFrame | null;
     coinIcon: SpriteFrame | null;
     animFrames: SpriteFrame[];
     animFps: number;
-    actionButtons: DialogActionButtonSprites | null;
+    buttons: LevelClearButtonSprites | null;
 };
 
 export type LevelClearOpenOptions = {
@@ -46,6 +62,127 @@ function fullSize(root: Node): { w: number; h: number } {
         w: ut && ut.width > 1 ? ut.width : 720,
         h: ut && ut.height > 1 ? ut.height : 1280,
     };
+}
+
+function btnSizeFromSprite(sf: SpriteFrame | null, defaultW: number, defaultH: number) {
+    if (!sf) return { w: defaultW, h: defaultH };
+    const r = sf.rect;
+    return { w: Math.max(1, r.width), h: Math.max(1, r.height) };
+}
+
+function applyRoundLabelStyle(lab: Label, color: Color, fontSize: number) {
+    lab.useSystemFont = true;
+    lab.fontFamily = ROUND_FONT_FAMILY;
+    lab.isBold = true;
+    lab.fontSize = fontSize;
+    lab.color = color;
+    lab.enableOutline = true;
+    lab.outlineColor = C_ROUND_OUTLINE;
+    lab.outlineWidth = 2;
+    lab.horizontalAlign = Label.HorizontalAlign.CENTER;
+    lab.verticalAlign = Label.VerticalAlign.CENTER;
+}
+
+function mkRoundLabel(parent: Node, text: string, color: Color, fontSize: number): Node {
+    const n = new Node('Part');
+    n.setParent(parent);
+    const estW = Math.max(fontSize, Math.ceil(text.length * fontSize * 0.92));
+    n.addComponent(UITransform).setContentSize(estW, fontSize + 12);
+    const lab = n.addComponent(Label);
+    lab.string = text;
+    applyRoundLabelStyle(lab, color, fontSize);
+    return n;
+}
+
+/** 「本关连线」+ 数字 +「次」，圆体、棕/绿分色 */
+function mkConnectCountRow(parent: Node, x: number, y: number, count: number) {
+    const row = new Node('ConnectCount');
+    row.setParent(parent);
+    row.setPosition(x, y, 0);
+
+    const chars = ['本', '关', '连', '线'];
+    const num = `${count}`;
+    const charW = ROUND_FONT_SIZE * 0.92;
+    const numW = num.length * ROUND_NUM_FONT_SIZE * 0.62;
+    const sufW = ROUND_FONT_SIZE * 0.92;
+    const secGap = 10;
+    const midGap = ROUND_CHAR_GAP;
+    const totalW =
+        chars.length * charW +
+        (chars.length - 1) * ROUND_CHAR_GAP +
+        secGap +
+        numW +
+        midGap +
+        sufW;
+
+    let cx = -totalW / 2;
+    for (const ch of chars) {
+        const n = mkRoundLabel(row, ch, C_ROUND_TEXT, ROUND_FONT_SIZE);
+        n.setPosition(cx + charW / 2, 0, 0);
+        cx += charW + ROUND_CHAR_GAP;
+    }
+    cx += secGap - ROUND_CHAR_GAP;
+
+    const numN = mkRoundLabel(row, num, C_ROUND_NUM, ROUND_NUM_FONT_SIZE);
+    numN.setPosition(cx + numW / 2, 0, 0);
+    cx += numW + midGap;
+
+    const sufN = mkRoundLabel(row, '次', C_ROUND_TEXT, ROUND_FONT_SIZE);
+    sufN.setPosition(cx + sufW / 2, 0, 0);
+}
+
+function mountLevelClearSpriteButton(
+    node: Node,
+    sfNormal: SpriteFrame,
+    sfPressed: SpriteFrame | null,
+) {
+    const sp = node.getComponent(Sprite) ?? node.addComponent(Sprite);
+    sp.spriteFrame = sfNormal;
+    sp.sizeMode = Sprite.SizeMode.CUSTOM;
+    sp.color = Color.WHITE;
+    const pressSf = sfPressed ?? sfNormal;
+    const toNormal = () => {
+        if (sp.isValid) sp.spriteFrame = sfNormal;
+    };
+    const toPress = () => {
+        if (sp.isValid) sp.spriteFrame = pressSf;
+    };
+    node.on(Node.EventType.TOUCH_START, toPress, node);
+    node.on(Node.EventType.TOUCH_END, toNormal, node);
+    node.on(Node.EventType.TOUCH_CANCEL, toNormal, node);
+}
+
+function mkLevelClearButton(
+    parent: Node,
+    x: number,
+    y: number,
+    name: string,
+    sfNormal: SpriteFrame | null,
+    sfPressed: SpriteFrame | null,
+    fallbackFill: Color,
+    onClick: () => void,
+    host: Component,
+    defaultW: number,
+    defaultH: number,
+): Node {
+    const { w, h } = btnSizeFromSprite(sfNormal, defaultW, defaultH);
+    const n = new Node(name);
+    n.setParent(parent);
+    n.setPosition(x, y, 0);
+    n.addComponent(UITransform).setContentSize(w, h);
+
+    if (sfNormal) {
+        mountLevelClearSpriteButton(n, sfNormal, sfPressed);
+    } else {
+        const g = n.addComponent(Graphics);
+        g.fillColor = fallbackFill;
+        g.fillRect(-w / 2, -h / 2, w, h);
+    }
+
+    const btn = n.addComponent(Button);
+    btn.transition = Button.Transition.NONE;
+    n.on(Button.EventType.CLICK, onClick, host);
+    return n;
 }
 
 @ccclass('LevelClearCelebration')
@@ -164,88 +301,45 @@ export function openLevelClearOverlay(
     const panel = mkDialogPanelShell(root, panelW, panelH);
     applyDialogPanelBackground(panel, panelW, panelH, cfg?.panelBg ?? null);
 
-    const titleN = new Node('Title');
-    titleN.setParent(panel);
-    titleN.setPosition(0, panelH * 0.28, 0);
-    titleN.addComponent(UITransform).setContentSize(panelW - 40, 40);
-    const tl = titleN.addComponent(Label);
-    tl.string = '通关结算';
-    tl.fontSize = 30;
-    tl.color = C_TITLE;
-    tl.horizontalAlign = Label.HorizontalAlign.CENTER;
-    tl.verticalAlign = Label.VerticalAlign.CENTER;
-    applyLabelBlackOutline(tl);
-
-    const lvlN = new Node('Level');
-    lvlN.setParent(panel);
-    lvlN.setPosition(0, panelH * 0.12, 0);
-    lvlN.addComponent(UITransform).setContentSize(panelW - 48, 36);
-    const ll = lvlN.addComponent(Label);
-    ll.string = `第 ${opts.level} 关 通关`;
-    ll.fontSize = 24;
-    ll.color = C_BODY;
-    ll.horizontalAlign = Label.HorizontalAlign.CENTER;
-    ll.verticalAlign = Label.VerticalAlign.CENTER;
-    applyLabelBlackOutline(ll);
-
-    const rowY = -panelH * 0.06;
+    const coinBaseY = -panelH * 0.06;
     if (opts.coinAmount > 0) {
-        if (cfg?.coinIcon) {
-            const iconN = new Node('CoinIcon');
-            iconN.setParent(panel);
-            iconN.setPosition(-72, rowY, 0);
-            const r = cfg.coinIcon.rect;
-            const uw = Math.max(1, r.width);
-            const uh = Math.max(1, r.height);
-            iconN.addComponent(UITransform).setContentSize(uw, uh);
-            const isp = iconN.addComponent(Sprite);
-            isp.spriteFrame = cfg.coinIcon;
-            isp.sizeMode = Sprite.SizeMode.TRIMMED;
-            const s = Math.min(44 / uw, 44 / uh);
-            iconN.setScale(s, s, 1);
-        }
         const amtN = new Node('CoinAmt');
         amtN.setParent(panel);
-        amtN.setPosition(cfg?.coinIcon ? 16 : 0, rowY, 0);
+        amtN.setPosition(55, coinBaseY + 137, 0);
         amtN.addComponent(UITransform).setContentSize(panelW - 56, 40);
         const al = amtN.addComponent(Label);
         al.string = `+${opts.coinAmount} 金币`;
-        al.fontSize = 26;
+        al.fontSize = 31;
         al.color = C_TITLE;
         al.horizontalAlign = Label.HorizontalAlign.CENTER;
         al.verticalAlign = Label.VerticalAlign.CENTER;
-        applyLabelBlackOutline(al);
+        al.enableOutline = true;
+        al.outlineColor = Color.BLACK;
+        al.outlineWidth = 2;
     }
 
-    const subN = new Node('Sub');
-    subN.setParent(panel);
-    subN.setPosition(0, -panelH * 0.16, 0);
-    subN.addComponent(UITransform).setContentSize(panelW - 48, 28);
-    const sl = subN.addComponent(Label);
-    sl.string =
-        opts.coinAmount > 0
-            ? `本关连线 ${opts.coinAmount} 次`
-            : '本关未获得金币奖励';
-    sl.fontSize = 18;
-    sl.color = C_BODY;
-    sl.horizontalAlign = Label.HorizontalAlign.CENTER;
-    sl.verticalAlign = Label.VerticalAlign.CENTER;
+    mkConnectCountRow(panel, 50, -panelH * 0.16 + 68, opts.coinAmount);
 
     const btnY = -panelH * 0.34;
-    const halfSpan = btnW + btnGap * 0.5;
-    const sprites = cfg?.actionButtons ?? null;
+    const buttons = cfg?.buttons ?? null;
+    const homeSize = btnSizeFromSprite(buttons?.homeNormal ?? null, btnW, btnH);
+    const nextSize = btnSizeFromSprite(buttons?.nextNormal ?? null, btnW, btnH);
+    const totalBtnW = homeSize.w + btnGap + nextSize.w;
+    const homeX = -totalBtnW / 2 + homeSize.w / 2;
+    const nextX = totalBtnW / 2 - nextSize.w / 2;
 
     const closeAll = () => {
         if (root.isValid) root.destroy();
     };
 
-    mkDialogActionButton(
+    mkLevelClearButton(
         panel,
-        -halfSpan,
+        homeX,
         btnY,
-        'cancel',
-        '返回首页',
-        sprites,
+        'BtnHome',
+        buttons?.homeNormal ?? null,
+        buttons?.homePressed ?? null,
+        C_BTN_HOME,
         () => {
             closeAll();
             opts.onHome();
@@ -255,13 +349,14 @@ export function openLevelClearOverlay(
         btnH,
     );
 
-    mkDialogActionButton(
+    mkLevelClearButton(
         panel,
-        halfSpan,
+        nextX,
         btnY,
-        'ok',
-        '下一关',
-        sprites,
+        'BtnNext',
+        buttons?.nextNormal ?? null,
+        buttons?.nextPressed ?? null,
+        C_BTN_NEXT,
         () => {
             closeAll();
             opts.onNext();

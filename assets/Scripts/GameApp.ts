@@ -127,6 +127,16 @@ export class GameApp extends Component {
     levelClearAnimFrames: SpriteFrame[] = [];
     @property({ tooltip: '庆祝动画帧率（帧/秒）' })
     levelClearAnimFps = 12;
+    /** 通关结算：返回首页（普通 / 按下），不配置则用纯色底、无文字 */
+    @property(SpriteFrame)
+    levelClearBtnHomeNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    levelClearBtnHomePressed: SpriteFrame | null = null;
+    /** 通关结算：下一关（普通 / 按下），不配置则用纯色底、无文字 */
+    @property(SpriteFrame)
+    levelClearBtnNextNormal: SpriteFrame | null = null;
+    @property(SpriteFrame)
+    levelClearBtnNextPressed: SpriteFrame | null = null;
 
     /** 场上无可连对时弹窗主文案 */
     @property
@@ -226,6 +236,8 @@ export class GameApp extends Component {
     private _game: GameView | null = null;
     private _shopEnabled = false;
     private _shopGroups: ShopCatalogGroup[] = [];
+    /** 防止连点卡组/商店时在主线程重复构建弹窗 */
+    private _homeDialogOpening = false;
 
     onLoad() {
         linkLog('GameApp.onLoad', 'begin', { node: nodePath(this.node), active: this.node.active });
@@ -344,7 +356,12 @@ export class GameApp extends Component {
             coinIcon: this.coinIcon,
             animFrames: this.levelClearAnimFrames ?? [],
             animFps: Math.max(1, this.levelClearAnimFps),
-            actionButtons: this._getDialogActionButtons(),
+            buttons: {
+                homeNormal: this.levelClearBtnHomeNormal,
+                homePressed: this.levelClearBtnHomePressed,
+                nextNormal: this.levelClearBtnNextNormal,
+                nextPressed: this.levelClearBtnNextPressed,
+            },
         };
         this._game.setLevelClearDialog(cfg);
         this._game.setLevelClearPassSfx(this.sfxLevelClear);
@@ -508,51 +525,61 @@ export class GameApp extends Component {
 
     private _openDeckDialog() {
         const hr = this._home?.node;
-        if (!hr) return;
-        DeckSelectDialog.open(hr, {
-            tileFaces: this._getTileFacesForGame(),
-            panelBg: this.deckDialogPanelBg,
-            actionButtons: this._getDialogActionButtons(),
-            shopEnabled: this._shopEnabled,
-            shopGroups: this._shopGroups.length > 0 ? this._shopGroups : undefined,
-            deckEntries: this._shopEnabled ? getPurchasedDeckEntries(this._shopGroups) : undefined,
-            onSaved: (ids) => {
-                this._game?.setDeckTypeIds(ids);
-                if (this._shopEnabled) {
-                    this._game?.setTileFaceSprites(this._getTileFacesForGame());
-                }
-            },
-        });
+        if (!hr || this._homeDialogOpening) return;
+        if (hr.getChildByName('DeckSelectModal')) return;
+        this._homeDialogOpening = true;
+        this.scheduleOnce(() => {
+            this._homeDialogOpening = false;
+            if (!hr.isValid || hr.getChildByName('DeckSelectModal')) return;
+            DeckSelectDialog.open(hr, {
+                tileFaces: this._getTileFacesForGame(),
+                panelBg: this.deckDialogPanelBg,
+                actionButtons: this._getDialogActionButtons(),
+                shopEnabled: this._shopEnabled,
+                shopGroups: this._shopGroups.length > 0 ? this._shopGroups : undefined,
+                deckEntries: this._shopEnabled ? getPurchasedDeckEntries(this._shopGroups) : undefined,
+                onSaved: (ids) => {
+                    this._game?.setDeckTypeIds(ids);
+                    if (this._shopEnabled) {
+                        this._game?.setTileFaceSprites(this._getTileFacesForGame());
+                    }
+                },
+            });
+        }, 0);
     }
 
     private _openShopDialog() {
         const hr = this._home?.node;
-        if (!hr) return;
+        if (!hr || this._homeDialogOpening) return;
         if (hr.getChildByName('ShopModal')) return;
+        this._homeDialogOpening = true;
+        this.scheduleOnce(() => {
+            this._homeDialogOpening = false;
+            if (!hr.isValid || hr.getChildByName('ShopModal')) return;
+            this._rebuildShopCatalog();
+            if (!this._shopEnabled) {
+                this._home?.showToast('请先在 GameApp 的商店分组中配置方块贴图。');
+                return;
+            }
 
-        this._rebuildShopCatalog();
-        if (!this._shopEnabled) {
-            this._home?.showToast('请先在 GameApp 的商店分组中配置方块贴图。');
-            return;
-        }
-
-        ShopDialog.open(hr, {
-            groups: this._shopGroups,
-            panelBg: this.shopDialogPanelBg,
-            actionButtons: this._getDialogActionButtons(),
-            coinIcon: this.coinIcon,
-            propIcons: {
-                hint: this.toolBtnHintNormal,
-                refresh: this.toolBtnRefreshNormal,
-                eliminate: this.toolBtnEliminateNormal,
-            },
-            shopButtons: {
-                buyNormal: this.shopBtnBuyNormal,
-                buyPressed: this.shopBtnBuyPressed,
-                owned: this.shopBtnOwnedLabel,
-            },
-            onCoinsChanged: () => this._refreshHomeCoins(),
-        });
+            ShopDialog.open(hr, {
+                groups: this._shopGroups,
+                panelBg: this.shopDialogPanelBg,
+                actionButtons: this._getDialogActionButtons(),
+                coinIcon: this.coinIcon,
+                propIcons: {
+                    hint: this.toolBtnHintNormal,
+                    refresh: this.toolBtnRefreshNormal,
+                    eliminate: this.toolBtnEliminateNormal,
+                },
+                shopButtons: {
+                    buyNormal: this.shopBtnBuyNormal,
+                    buyPressed: this.shopBtnBuyPressed,
+                    owned: this.shopBtnOwnedLabel,
+                },
+                onCoinsChanged: () => this._refreshHomeCoins(),
+            });
+        }, 0);
     }
 
     private _enterGame() {

@@ -9,9 +9,14 @@ import {
     ScrollView,
     Sprite,
     SpriteFrame,
+    tween,
+    UIOpacity,
     UITransform,
+    Vec3,
     Widget,
+    easing,
 } from 'cc';
+import { DIALOG_ROW_POP_DURATION, RowRevealRunner } from '../util/DialogRowReveal';
 import { getLayoutSizeForNode } from '../util/ViewSize';
 import {
     type DeckEntry,
@@ -118,6 +123,15 @@ export class DeckSelectDialog extends Component {
     private _selectedShopKeys = new Set<string>();
     private _countLabel: Label | null = null;
     private _okBtn: DialogActionButtonResult | null = null;
+    private readonly _rowReveal = new RowRevealRunner(this);
+
+    onDestroy() {
+        this._rowReveal.stop();
+    }
+
+    update(dt: number) {
+        this._rowReveal.tick(dt);
+    }
 
     init(
         opts: {
@@ -288,11 +302,6 @@ export class DeckSelectDialog extends Component {
         scroll.elastic = true;
         scroll.bounceDuration = 0.2;
 
-        let yCursor = contentH / 2 - DECK_CONTENT_TOP_PAD;
-        for (const sec of sections) {
-            yCursor = this._mkDeckGroup(content, innerW, yCursor, sec, cols, shopOn);
-        }
-
         scroll.scrollToTop(0);
 
         const cntN = new Node('Count');
@@ -341,6 +350,63 @@ export class DeckSelectDialog extends Component {
         );
 
         this._refreshFooter();
+
+        const rowFns: Array<() => void> = [];
+        let yCursor = contentH / 2 - DECK_CONTENT_TOP_PAD;
+        for (const sec of sections) {
+            const shell = this._mkDeckGroupShell(content, innerW, yCursor, sec, cols, shopOn);
+            yCursor = shell.nextY;
+            this._appendDeckRowJobs(rowFns, sec, cols, shell.grid, shell.gridW, shell.gridH, shopOn);
+        }
+        this._rowReveal.start(rowFns);
+    }
+
+    private _appendDeckRowJobs(
+        rowFns: Array<() => void>,
+        section: DeckSection,
+        cols: number,
+        grid: Node,
+        gridW: number,
+        gridH: number,
+        shopOn: boolean,
+    ) {
+        const originX = -gridW / 2 + CELL_FACE / 2;
+        const originY = gridH / 2 - CELL_FACE / 2;
+        const rowCount = Math.max(1, Math.ceil(section.items.length / cols));
+        for (let row = 0; row < rowCount; row++) {
+            const rowIndex = row;
+            rowFns.push(() => {
+                if (!grid.isValid) return;
+                for (let col = 0; col < cols; col++) {
+                    const idx = rowIndex * cols + col;
+                    if (idx >= section.items.length) break;
+                    const item = section.items[idx];
+                    const bx = originX + col * (CELL_FACE + CELL_GAP);
+                    const by = originY - rowIndex * (CELL_FACE + CELL_GAP);
+                    this._mkDeckCell(grid, bx, by, item, shopOn, true);
+                }
+            });
+        }
+    }
+
+    private _playDeckCellPop(cellRoot: Node, bx: number, by: number) {
+        const popDy = CELL_FACE * 0.35;
+        cellRoot.setPosition(bx, by + popDy, 0);
+        cellRoot.setScale(0.55, 0.55, 1);
+        const op = cellRoot.getComponent(UIOpacity) ?? cellRoot.addComponent(UIOpacity);
+        op.opacity = 48;
+        tween(cellRoot).stop();
+        tween(op).stop();
+        tween(cellRoot)
+            .to(
+                DIALOG_ROW_POP_DURATION,
+                { position: new Vec3(bx, by, 0), scale: new Vec3(1, 1, 1) },
+                { easing: easing.backOut },
+            )
+            .start();
+        tween(op)
+            .to(DIALOG_ROW_POP_DURATION * 0.85, { opacity: 255 }, { easing: easing.sineOut })
+            .start();
     }
 
     private _buildDeckSections(
@@ -398,14 +464,14 @@ export class DeckSelectDialog extends Component {
         return h;
     }
 
-    private _mkDeckGroup(
+    private _mkDeckGroupShell(
         parent: Node,
         innerW: number,
         topY: number,
         section: DeckSection,
         cols: number,
-        shopOn: boolean,
-    ): number {
+        _shopOn: boolean,
+    ): { grid: Node; gridW: number; gridH: number; nextY: number } {
         const titleN = new Node(`Title_${section.title}`);
         titleN.setParent(parent);
         titleN.setPosition(0, topY - DECK_GROUP_TITLE_H / 2, 0);
@@ -427,25 +493,30 @@ export class DeckSelectDialog extends Component {
         grid.setPosition(0, topY - DECK_GROUP_TITLE_H - gridH / 2 - 4, 0);
         grid.addComponent(UITransform).setContentSize(gridW, gridH);
 
-        const originX = -gridW / 2 + CELL_FACE / 2;
-        const originY = gridH / 2 - CELL_FACE / 2;
-
-        section.items.forEach((item, idx) => {
-            const col = idx % cols;
-            const row = Math.floor(idx / cols);
-            const bx = originX + col * (CELL_FACE + CELL_GAP);
-            const by = originY - row * (CELL_FACE + CELL_GAP);
-            this._mkDeckCell(grid, bx, by, item, shopOn);
-        });
-
-        return topY - DECK_GROUP_TITLE_H - gridH - DECK_GROUP_SECTION_GAP;
+        return {
+            grid,
+            gridW,
+            gridH,
+            nextY: topY - DECK_GROUP_TITLE_H - gridH - DECK_GROUP_SECTION_GAP,
+        };
     }
 
-    private _mkDeckCell(parent: Node, bx: number, by: number, item: DeckGridItem, shopOn: boolean) {
+    private _mkDeckCell(
+        parent: Node,
+        bx: number,
+        by: number,
+        item: DeckGridItem,
+        shopOn: boolean,
+        animate = false,
+    ) {
         const cellRoot = new Node(`T_${item.key}`);
         cellRoot.setParent(parent);
-        cellRoot.setPosition(bx, by, 0);
         cellRoot.addComponent(UITransform).setContentSize(CELL_FACE, CELL_FACE);
+        if (animate) {
+            this._playDeckCellPop(cellRoot, bx, by);
+        } else {
+            cellRoot.setPosition(bx, by, 0);
+        }
 
         const faceN = new Node('Face');
         faceN.setParent(cellRoot);

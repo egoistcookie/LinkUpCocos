@@ -9,9 +9,14 @@ import {
     ScrollView,
     Sprite,
     SpriteFrame,
+    tween,
+    UIOpacity,
     UITransform,
+    Vec3,
     Widget,
+    easing,
 } from 'cc';
+import { DIALOG_ROW_POP_DURATION, RowRevealRunner } from '../util/DialogRowReveal';
 import { getLayoutSizeForNode } from '../util/ViewSize';
 import {
     isShopBlockOwned,
@@ -31,6 +36,7 @@ import {
     mkDialogPanelShell,
     refreshDialogPanelBackgroundSize,
 } from '../util/DialogPanelBg';
+import { showFrameToast } from '../util/FrameToast';
 
 /** 商店背景贴图在底板高度上额外拉伸的像素（不改底板与关闭按钮位置） */
 const SHOP_BG_TEXTURE_STRETCH_H = 190;
@@ -142,7 +148,15 @@ export class ShopDialog extends Component {
     };
 
     private _coinLabel: Label | null = null;
-    private _toastNode: Node | null = null;
+    private readonly _rowReveal = new RowRevealRunner(this);
+
+    onDestroy() {
+        this._rowReveal.stop();
+    }
+
+    update(dt: number) {
+        this._rowReveal.tick(dt);
+    }
 
     init(
         opts: {
@@ -178,32 +192,16 @@ export class ShopDialog extends Component {
     }
 
     private _showToast(message: string) {
-        if (this._toastNode?.isValid) this._toastNode.destroy();
         const panel = this.node.getChildByName('Panel');
         if (!panel) return;
         const panelW = panel.getComponent(UITransform)?.width ?? 400;
-        const t = new Node('ShopToast');
-        t.setParent(panel);
-        t.setSiblingIndex(panel.children.length - 1);
-        const tw = Math.min(panelW - 48, 420);
-        t.setPosition(0, 0, 0);
-        t.addComponent(UITransform).setContentSize(tw, 88);
-        addCenterFillRect(t, tw, 72, new Color(0x0d, 0x1b, 0x2a, 240));
-        const labN = new Node('Msg');
-        labN.setParent(t);
-        labN.addComponent(UITransform).setContentSize(tw - 20, 64);
-        const lab = labN.addComponent(Label);
-        lab.string = message;
-        lab.fontSize = 20;
-        lab.color = new Color(0xff, 0xb4, 0xa2, 255);
-        lab.horizontalAlign = Label.HorizontalAlign.CENTER;
-        lab.verticalAlign = Label.VerticalAlign.CENTER;
-        lab.overflow = Label.Overflow.RESIZE_HEIGHT;
-        this._toastNode = t;
-        this.scheduleOnce(() => {
-            if (t.isValid) t.destroy();
-            if (this._toastNode === t) this._toastNode = null;
-        }, 2);
+        showFrameToast(panel, this, message, {
+            duration: 2,
+            nodeName: 'ShopToast',
+            placement: 'center',
+            maxTextWidth: Math.min(panelW - 48, 420),
+            compactHeight: message === '购买成功',
+        });
     }
 
     private _bindClick(node: Node, w: number, h: number, onClick: () => void) {
@@ -407,19 +405,6 @@ export class ShopDialog extends Component {
         scroll.elastic = true;
         scroll.cancelInnerEvents = false;
 
-        let yCursor = contentH / 2 - 4;
-
-        yCursor = this._mkPropRow(content, contentW, yCursor);
-
-        let firstGroup = true;
-        for (const lay of groupLayouts) {
-            if (firstGroup) {
-                yCursor -= PROP_TO_FIRST_GROUP_GAP + SHOP_BLOCKS_TOP_OFFSET;
-                firstGroup = false;
-            }
-            yCursor = this._mkBlockGroup(content, contentW, yCursor, lay.group, lay.cols);
-        }
-
         scroll.scrollToTop(0);
 
         mkDialogActionButton(
@@ -432,6 +417,69 @@ export class ShopDialog extends Component {
             () => this._close(),
             this,
         );
+
+        let yCursor = contentH / 2 - 4;
+        yCursor = this._mkPropRow(content, contentW, yCursor);
+        const rowFns: Array<() => void> = [];
+        let firstGroup = true;
+        for (const lay of groupLayouts) {
+            if (firstGroup) {
+                yCursor -= PROP_TO_FIRST_GROUP_GAP + SHOP_BLOCKS_TOP_OFFSET;
+                firstGroup = false;
+            }
+            const shell = this._mkBlockGroupShell(content, contentW, yCursor, lay.group, lay.cols);
+            yCursor = shell.nextY;
+            this._appendShopRowJobs(rowFns, lay.group, lay.cols, shell.grid, shell.gridW, shell.gridH);
+        }
+        this._rowReveal.start(rowFns);
+    }
+
+    /** 按行登记加载任务（自上而下、从左到右，与游戏发牌顺序一致） */
+    private _appendShopRowJobs(
+        rowFns: Array<() => void>,
+        group: ShopCatalogGroup,
+        cols: number,
+        grid: Node,
+        gridW: number,
+        gridH: number,
+    ) {
+        const originX = -gridW / 2 + BLOCK_COL_W / 2;
+        const originY = gridH / 2 - BLOCK_ROW_STEP / 2;
+        const rowCount = Math.max(1, Math.ceil(group.items.length / cols));
+        for (let row = 0; row < rowCount; row++) {
+            const rowIndex = row;
+            rowFns.push(() => {
+                if (!grid.isValid) return;
+                for (let col = 0; col < cols; col++) {
+                    const idx = rowIndex * cols + col;
+                    if (idx >= group.items.length) break;
+                    const item = group.items[idx];
+                    const bx = originX + col * (BLOCK_COL_W + COL_GAP);
+                    const by = originY - rowIndex * BLOCK_ROW_STEP;
+                    this._mkShopBlockCell(grid, item, bx, by, true);
+                }
+            });
+        }
+    }
+
+    private _playShopCellPop(cell: Node, bx: number, by: number) {
+        const popDy = BLOCK_ROW_STEP * 0.35;
+        cell.setPosition(bx, by + popDy, 0);
+        cell.setScale(0.55, 0.55, 1);
+        const op = cell.getComponent(UIOpacity) ?? cell.addComponent(UIOpacity);
+        op.opacity = 48;
+        tween(cell).stop();
+        tween(op).stop();
+        tween(cell)
+            .to(
+                DIALOG_ROW_POP_DURATION,
+                { position: new Vec3(bx, by, 0), scale: new Vec3(1, 1, 1) },
+                { easing: easing.backOut },
+            )
+            .start();
+        tween(op)
+            .to(DIALOG_ROW_POP_DURATION * 0.85, { opacity: 255 }, { easing: easing.sineOut })
+            .start();
     }
 
     /** 表头金币（在「商店」左侧、同 Y，固定在 panel 上不随滚动） */
@@ -461,7 +509,7 @@ export class ShopDialog extends Component {
 
         const labN = new Node('CoinCount');
         labN.setParent(bar);
-        labN.setPosition(-barW / 2 + 64, 0, 0);
+        labN.setPosition(-barW / 2 + 67, 0, 0);
         labN.addComponent(UITransform).setContentSize(140, 36);
         const lab = labN.addComponent(Label);
         lab.string = `${loadCoins()}`;
@@ -554,13 +602,13 @@ export class ShopDialog extends Component {
         return topY - rowH - 12;
     }
 
-    private _mkBlockGroup(
+    private _mkBlockGroupShell(
         parent: Node,
         innerW: number,
         topY: number,
         group: ShopCatalogGroup,
         cols: number,
-    ): number {
+    ): { grid: Node; gridW: number; gridH: number; nextY: number } {
         const titleN = new Node(`Title_${group.title}`);
         titleN.setParent(parent);
         titleN.setPosition(0, topY - GROUP_TITLE_H / 2, 0);
@@ -582,72 +630,78 @@ export class ShopDialog extends Component {
         grid.setPosition(0, topY - GROUP_TITLE_H - gridH / 2 - 4, 0);
         grid.addComponent(UITransform).setContentSize(gridW, gridH);
 
-        const originX = -gridW / 2 + BLOCK_COL_W / 2;
-        const originY = gridH / 2 - BLOCK_ROW_STEP / 2;
-
-        group.items.forEach((item, idx) => {
-            const col = idx % cols;
-            const row = Math.floor(idx / cols);
-            const bx = originX + col * (BLOCK_COL_W + COL_GAP);
-            const by = originY - row * BLOCK_ROW_STEP;
-
-            const cellH = BLOCK_ROW_STEP;
-            const cell = new Node(`B_${item.shopKey}`);
-            cell.setParent(grid);
-            cell.setPosition(bx, by, 0);
-            cell.addComponent(UITransform).setContentSize(BLOCK_COL_W, cellH);
-
-            const halfH = cellH / 2;
-            const faceY = halfH - BLOCK_FACE_H / 2 - 6;
-            const faceN = new Node('Face');
-            faceN.setParent(cell);
-            faceN.setPosition(0, faceY, 0);
-            const r = item.sprite.rect;
-            const uw = Math.max(1, r.width);
-            const uh = Math.max(1, r.height);
-            faceN.addComponent(UITransform).setContentSize(uw, uh);
-            const fsp = faceN.addComponent(Sprite);
-            fsp.spriteFrame = item.sprite;
-            fsp.sizeMode = Sprite.SizeMode.TRIMMED;
-            const s = Math.min((BLOCK_FACE_H - 4) / uw, (BLOCK_FACE_H - 4) / uh);
-            faceN.setScale(s, s, 1);
-
-            const priceY = faceY - BLOCK_FACE_H / 2 - BLOCK_PRICE_H / 2 - FACE_TO_PRICE_GAP;
-            const priceN = new Node('Price');
-            priceN.setParent(cell);
-            priceN.setPosition(0, priceY, 0);
-            priceN.addComponent(UITransform).setContentSize(BLOCK_COL_W, BLOCK_PRICE_H);
-            const pl = priceN.addComponent(Label);
-            pl.string = `${item.price} 金币`;
-            pl.fontSize = 14;
-            pl.color = C_ACCENT;
-            pl.horizontalAlign = Label.HorizontalAlign.CENTER;
-            pl.verticalAlign = Label.VerticalAlign.CENTER;
-
-            const btnY = priceY - BLOCK_PRICE_H / 2 - BLOCK_BTN_H / 2 - 4;
-            const owned = isShopBlockOwned(item.shopKey);
-
-            if (owned) {
-                this._mkOwnedBadge(cell, btnY);
-            } else {
-                const btnN = this._mkBuyButton(cell, btnY, 76, BLOCK_BTN_H, () => {
-                    const result = purchaseShopBlock(item.shopKey);
-                    if (result === 'success') {
-                        btnN.destroy();
-                        this._mkOwnedBadge(cell, btnY);
-                        this._notifyCoins();
-                        this._showToast('购买成功');
-                    } else if (result === 'insufficient_coins') {
-                        this._showToast(`金币不足，需要 ${item.price} 金币`);
-                    } else if (result === 'already_owned') {
-                        btnN.destroy();
-                        this._mkOwnedBadge(cell, btnY);
-                    }
-                });
-            }
-        });
-
-        return topY - GROUP_TITLE_H - gridH - GROUP_SECTION_GAP;
+        return {
+            grid,
+            gridW,
+            gridH,
+            nextY: topY - GROUP_TITLE_H - gridH - GROUP_SECTION_GAP,
+        };
     }
 
+    private _mkShopBlockCell(
+        grid: Node,
+        item: ShopCatalogGroup['items'][number],
+        bx: number,
+        by: number,
+        animate = false,
+    ) {
+        const cellH = BLOCK_ROW_STEP;
+        const cell = new Node(`B_${item.shopKey}`);
+        cell.setParent(grid);
+        cell.addComponent(UITransform).setContentSize(BLOCK_COL_W, cellH);
+        if (animate) {
+            this._playShopCellPop(cell, bx, by);
+        } else {
+            cell.setPosition(bx, by, 0);
+        }
+
+        const halfH = cellH / 2;
+        const faceY = halfH - BLOCK_FACE_H / 2 - 6;
+        const faceN = new Node('Face');
+        faceN.setParent(cell);
+        faceN.setPosition(0, faceY, 0);
+        const r = item.sprite.rect;
+        const uw = Math.max(1, r.width);
+        const uh = Math.max(1, r.height);
+        faceN.addComponent(UITransform).setContentSize(uw, uh);
+        const fsp = faceN.addComponent(Sprite);
+        fsp.spriteFrame = item.sprite;
+        fsp.sizeMode = Sprite.SizeMode.TRIMMED;
+        const s = Math.min((BLOCK_FACE_H - 4) / uw, (BLOCK_FACE_H - 4) / uh);
+        faceN.setScale(s, s, 1);
+
+        const priceY = faceY - BLOCK_FACE_H / 2 - BLOCK_PRICE_H / 2 - FACE_TO_PRICE_GAP;
+        const priceN = new Node('Price');
+        priceN.setParent(cell);
+        priceN.setPosition(0, priceY, 0);
+        priceN.addComponent(UITransform).setContentSize(BLOCK_COL_W, BLOCK_PRICE_H);
+        const pl = priceN.addComponent(Label);
+        pl.string = `${item.price} 金币`;
+        pl.fontSize = 14;
+        pl.color = C_ACCENT;
+        pl.horizontalAlign = Label.HorizontalAlign.CENTER;
+        pl.verticalAlign = Label.VerticalAlign.CENTER;
+
+        const btnY = priceY - BLOCK_PRICE_H / 2 - BLOCK_BTN_H / 2 - 4;
+        const owned = isShopBlockOwned(item.shopKey);
+
+        if (owned) {
+            this._mkOwnedBadge(cell, btnY);
+        } else {
+            const btnN = this._mkBuyButton(cell, btnY, 76, BLOCK_BTN_H, () => {
+                const result = purchaseShopBlock(item.shopKey);
+                if (result === 'success') {
+                    btnN.destroy();
+                    this._mkOwnedBadge(cell, btnY);
+                    this._notifyCoins();
+                    this._showToast('购买成功');
+                } else if (result === 'insufficient_coins') {
+                    this._showToast(`金币不足，需要 ${item.price} 金币`);
+                } else if (result === 'already_owned') {
+                    btnN.destroy();
+                    this._mkOwnedBadge(cell, btnY);
+                }
+            });
+        }
+    }
 }

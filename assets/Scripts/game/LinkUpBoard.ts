@@ -34,20 +34,43 @@ export const TYPE_COUNT = 40;
 /** App 上可配置的棋盘格子贴图槽位数：第 n 项对应「n 号类型」（与格子数字一致） */
 export const TILE_SPRITE_SLOTS = 40;
 
+export type GravityDir = 'left' | 'right' | 'up' | 'down';
+
+const GRAVITY_DIR_TIPS: Record<GravityDir, string> = {
+    left: '方块消除后，同行剩余方块会向左靠齐',
+    right: '方块消除后，同行剩余方块会向右靠齐',
+    up: '方块消除后，同列剩余方块会向上靠齐',
+    down: '方块消除后，同列剩余方块会向下靠齐',
+};
+
+/** 第 6 关起：由关卡号确定四向之一（同关重开方向不变） */
+function randomGravityDirForLevel(level: number): GravityDir {
+    const dirs: GravityDir[] = ['left', 'right', 'up', 'down'];
+    const idx = ((level * 2654435761) >>> 0) % 4;
+    return dirs[idx];
+}
+
+/** 本关消除后方块靠齐方向；第 1 关无，2–5 关固定教学，第 6 关起每关随机四向之一 */
+export function getGravityDirForLevel(level: number): GravityDir | null {
+    const lv = Math.max(1, Math.floor(level));
+    switch (lv) {
+        case 2:
+            return 'left';
+        case 3:
+            return 'right';
+        case 4:
+            return 'up';
+        case 5:
+            return 'down';
+        default:
+            return lv >= 6 ? randomGravityDirForLevel(lv) : null;
+    }
+}
+
 /** 进入关卡时的机制说明（第 1 关无；未配置的关卡返回 null） */
 export function getLevelEnterTip(level: number): string | null {
-    switch (Math.max(1, Math.floor(level))) {
-        case 2:
-            return '方块消除后，同行剩余方块会向左靠齐';
-        case 3:
-            return '方块消除后，同行剩余方块会向右靠齐';
-        case 4:
-            return '方块消除后，同列剩余方块会向上靠齐';
-        case 5:
-            return '方块消除后，同列剩余方块会向下靠齐';
-        default:
-            return null;
-    }
+    const dir = getGravityDirForLevel(level);
+    return dir ? GRAVITY_DIR_TIPS[dir] : null;
 }
 
 const COLOR_SEL = new Color(0xe9, 0xc4, 0x6a, 255);
@@ -76,10 +99,9 @@ const SHAKE_OFFSET = 5;
 const SHAKE_STEP = 0.035;
 /** 双击同一格判定间隔（毫秒） */
 const DOUBLE_CLICK_MS = 300;
-/** 第 2–5 关消除后方块靠齐动画时长（略慢 + backOut 轻微回弹） */
-const GRAVITY_MOVE_DURATION = 0.32;
+/** 有靠齐机制时消除后方块移动动画时长（略慢 + backOut 轻微回弹） */
+const GRAVITY_MOVE_DURATION = 0.5;
 
-type GravityDir = 'left' | 'right' | 'up' | 'down';
 type GravityMove = { fromR: number; fromC: number; toR: number; toC: number };
 
 /** 扩展盘外圈映射到本地坐标时，向棋盘内侧拉拢的比例（越大越贴棋盘，越不易伸出画面外） */
@@ -1103,18 +1125,7 @@ export class LinkUpBoard extends Component {
     }
 
     private _gravityDirForLevel(): GravityDir | null {
-        switch (this._level) {
-            case 2:
-                return 'left';
-            case 3:
-                return 'right';
-            case 4:
-                return 'up';
-            case 5:
-                return 'down';
-            default:
-                return null;
-        }
+        return getGravityDirForLevel(this._level);
     }
 
     private _computeGravity(
@@ -1327,27 +1338,51 @@ export class LinkUpBoard extends Component {
         this._syncAllCellVisuals();
     }
 
+    /** 消除道具：优先消除场上同类型的两个方块；若无同类型则随机消除两个 */
     removeTwoRandomTiles() {
         if (this._dealing || !this._layoutReady()) return;
+        const byType = new Map<number, Array<{ r: number; c: number }>>();
         const occ: Array<{ r: number; c: number }> = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
-                if (this.grid[r][c] != null) occ.push({ r, c });
+                const v = this.grid[r][c];
+                if (v == null) continue;
+                occ.push({ r, c });
+                const list = byType.get(v) ?? [];
+                if (list.length === 0) byType.set(v, list);
+                list.push({ r, c });
             }
         }
         if (occ.length === 0) return;
-        const i1 = Math.floor(Math.random() * occ.length);
-        let i2 = Math.floor(Math.random() * occ.length);
-        if (occ.length >= 2) {
+
+        const sameTypeKeys: number[] = [];
+        for (const [type, list] of byType) {
+            if (list.length >= 2) sameTypeKeys.push(type);
+        }
+
+        let a: { r: number; c: number };
+        let b: { r: number; c: number };
+        if (sameTypeKeys.length > 0) {
+            const type = sameTypeKeys[Math.floor(Math.random() * sameTypeKeys.length)];
+            const list = byType.get(type)!;
+            const i1 = Math.floor(Math.random() * list.length);
+            let i2 = Math.floor(Math.random() * list.length);
+            while (i2 === i1) i2 = Math.floor(Math.random() * list.length);
+            a = list[i1];
+            b = list[i2];
+        } else if (occ.length >= 2) {
+            const i1 = Math.floor(Math.random() * occ.length);
+            let i2 = Math.floor(Math.random() * occ.length);
             while (i2 === i1) i2 = Math.floor(Math.random() * occ.length);
+            a = occ[i1];
+            b = occ[i2];
         } else {
-            this.grid[occ[i1].r][occ[i1].c] = null;
-            this._syncCellVisual(occ[i1].r, occ[i1].c);
+            this.grid[occ[0].r][occ[0].c] = null;
+            this._syncCellVisual(occ[0].r, occ[0].c);
             this._afterChange();
             return;
         }
-        const a = occ[i1];
-        const b = occ[i2];
+
         this.grid[a.r][a.c] = null;
         this.grid[b.r][b.c] = null;
         this._syncCellVisual(a.r, a.c);

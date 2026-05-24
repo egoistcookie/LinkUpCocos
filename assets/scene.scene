@@ -286,7 +286,7 @@
     "_enabled": true,
     "__prefab": null,
     "homeBackground": {
-      "__uuid__": "f453a16a-261f-430e-aec5-c83e99901d69@f9941",
+      "__uuid__": "6bf64214-3202-445d-bc3c-56d1078325e0@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "gameBackground": {
@@ -467,9 +467,28 @@
     "sfxRefresh": null,
     "sfxEliminate": null,
     "sfxLevelClear": null,
-    "levelClearPanelBg": null,
+    "levelClearPanelBg": {
+      "__uuid__": "fe4d00c5-f073-4ec9-a07a-599ad15a4db1@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
     "levelClearAnimFrames": [],
     "levelClearAnimFps": 12,
+    "levelClearBtnHomeNormal": {
+      "__uuid__": "3c4efc42-540a-4561-bcfd-03938f4b3209@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
+    "levelClearBtnHomePressed": {
+      "__uuid__": "0f0f595a-5fd9-49ea-be71-031de60962d1@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
+    "levelClearBtnNextNormal": {
+      "__uuid__": "5c2ebba3-c979-4042-92fb-6d32c948d8e9@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
+    "levelClearBtnNextPressed": {
+      "__uuid__": "7281d762-1a70-4834-a3aa-4188b0fa1a84@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
     "noConnectDialogMessage": "场上没有可连线方块，自动刷新",
     "noConnectDialogTitle": "",
     "noConnectDialogAutoDelay": 1.2,
@@ -543,7 +562,7 @@
       "__expectedType__": "cc.SpriteFrame"
     },
     "coinIcon": {
-      "__uuid__": "cc2b0336-ffb0-4452-898b-6ee9ca49bfab@f9941",
+      "__uuid__": "c97490c2-9aca-4b6c-90d7-4d7400304e6a@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "testMode": true,
