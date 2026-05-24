@@ -36,7 +36,7 @@ import {
     mkDialogPanelShell,
     refreshDialogPanelBackgroundSize,
 } from '../util/DialogPanelBg';
-import { showFrameToast } from '../util/FrameToast';
+import { showFrameToast, TOAST_COIN_TEXT_COLOR } from '../util/FrameToast';
 
 /** 商店背景贴图在底板高度上额外拉伸的像素（不改底板与关闭按钮位置） */
 const SHOP_BG_TEXTURE_STRETCH_H = 190;
@@ -201,6 +201,7 @@ export class ShopDialog extends Component {
             placement: 'center',
             maxTextWidth: Math.min(panelW - 48, 420),
             compactHeight: message === '购买成功',
+            textColor: message === '购买成功' ? TOAST_COIN_TEXT_COLOR : undefined,
         });
     }
 

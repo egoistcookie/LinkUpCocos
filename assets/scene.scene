@@ -928,6 +928,62 @@
       {
         "__uuid__": "b2ad087f-333a-4d15-8c40-fe65e8945e6d@f9941",
         "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "d745785a-98d2-4274-b5a8-dd0a372d79b5@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "f0993971-a2ba-416d-901d-553a60ed158e@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "d16f728f-417a-4af0-99e6-18fb723b438e@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "e3b8233b-004c-4a33-ace7-12ee9cf5d71f@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "76389aa6-045a-42bd-9557-8f9c6f531d26@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "d858fdfe-d0e2-48a0-8081-acdd014ae713@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "c741d3e0-cf93-4261-9860-51e335a389e4@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "10ca6d02-3c51-48d7-a42e-0dec71abc221@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "de56ac97-9eb3-4a48-8abc-07098e31691a@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "e0a92e31-1fe9-4dd1-badd-c17a7e216547@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "cca3f4cb-6fa6-4f00-a232-710873e9e332@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "a5168ade-7e9d-4cdc-ab5c-f7b80a9d383a@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "6223d3ea-1ac8-484e-b27f-6693e661f968@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "c5524696-9fae-444e-9617-9871049a172f@f9941",
+        "__expectedType__": "cc.SpriteFrame"
       }
     ],
     "_id": "d4oRDiBEtChrSMx1K20q3/"

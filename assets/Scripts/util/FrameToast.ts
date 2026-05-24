@@ -20,6 +20,10 @@ const TOAST_MIDDLE_PAD_H = 8;
 const TOAST_SLICE_CAP_X_RATIO = 0.11;
 const TOAST_SLICE_CAP_Y_RATIO = 0.06;
 const TOAST_TEXT_OFFSET_Y = 5;
+/** 默认提示文案色；与商店金币数同色见 {@link TOAST_COIN_TEXT_COLOR} */
+const TOAST_DEFAULT_TEXT_COLOR = new Color(0x5a, 0x3e, 0x28, 255);
+/** 与首页/商店金币数字一致的金色 */
+export const TOAST_COIN_TEXT_COLOR = new Color(0xe9, 0xc4, 0x6a, 255);
 
 let _toastBg: SpriteFrame | null = null;
 
@@ -35,6 +39,8 @@ export type FrameToastOptions = {
     /** 单行短文案：高度仅上下边框；多行/auto 时含中间拉伸区 */
     compactHeight?: boolean;
     textOffsetY?: number;
+    /** 文案颜色，默认深棕 */
+    textColor?: Color;
 };
 
 function configureToastFrameSlice(sf: SpriteFrame) {
@@ -160,6 +166,7 @@ function mountToastLabel(
     boxW: number,
     boxH: number,
     textOffsetY: number,
+    textColor: Color,
 ) {
     const labN = new Node('Msg');
     labN.setParent(parent);
@@ -179,7 +186,7 @@ function mountToastLabel(
     lab.string = message;
     lab.fontSize = TOAST_FONT_SIZE;
     lab.lineHeight = TOAST_FONT_SIZE;
-    lab.color = new Color(0x5a, 0x3e, 0x28, 255);
+    lab.color = textColor;
     lab.horizontalAlign = Label.HorizontalAlign.CENTER;
     lab.verticalAlign = Label.VerticalAlign.CENTER;
     lab.overflow = Label.Overflow.CLAMP;
@@ -228,6 +235,7 @@ export function showFrameToast(
     const textOffsetY = opts?.textOffsetY ?? TOAST_TEXT_OFFSET_Y;
     const maxTextWidth = opts?.maxTextWidth ?? Math.min(520, getLayoutSizeForNode(parent).width - 48);
     const compactHeight = opts?.compactHeight ?? (!message.includes('\n') && message.length <= 12);
+    const textColor = opts?.textColor ?? TOAST_DEFAULT_TEXT_COLOR;
 
     const prev = parent.getChildByName(nodeName);
     if (prev?.isValid) prev.destroy();
@@ -258,7 +266,7 @@ export function showFrameToast(
             mountToastBg(root, host, sf, boxW, boxH);
         }
 
-        mountToastLabel(root, host, message, boxW, boxH, textOffsetY);
+        mountToastLabel(root, host, message, boxW, boxH, textOffsetY, textColor);
 
         host.scheduleOnce(() => {
             if (root.isValid) root.destroy();
