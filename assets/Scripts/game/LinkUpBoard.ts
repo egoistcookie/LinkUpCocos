@@ -1377,12 +1377,14 @@ export class LinkUpBoard extends Component {
             a = occ[i1];
             b = occ[i2];
         } else {
+            this.onConnectSfx?.();
             this.grid[occ[0].r][occ[0].c] = null;
             this._syncCellVisual(occ[0].r, occ[0].c);
             this._afterChange();
             return;
         }
 
+        this.onConnectSfx?.();
         this.grid[a.r][a.c] = null;
         this.grid[b.r][b.c] = null;
         this._syncCellVisual(a.r, a.c);

@@ -57,8 +57,13 @@ export type GameSfxConfig = {
     eliminate: AudioClip | null;
 };
 
-const C_BAR = new Color(0x0d, 0x1b, 0x2a, 220);
 const C_BTN = new Color(0x41, 0x5a, 0x77, 255);
+const TOP_BAR_H = 88;
+const HEADER_BG_H_EXTRA = 70;
+const LEVEL_LABEL_OFFSET_X = -1;
+const LEVEL_LABEL_OFFSET_Y = -8;
+/** 底栏提示/刷新/消除按钮在 BottomBar 内的 y（相对原 28 上移 10px） */
+const BOTTOM_TOOL_BTN_Y = 38;
 
 /** 棋盘区高度比原中间槽再缩小（与背景无关） */
 const BOARD_SLOT_H_SHRINK = 20;
@@ -138,6 +143,9 @@ export class GameView extends Component {
     /** GameApp 注入的全屏游戏页背景；未配置则不建 GameBg */
     private _gameBackground: SpriteFrame | null = null;
     private _gameBgNode: Node | null = null;
+    private _gameHeaderBackground: SpriteFrame | null = null;
+    private _topBarNode: Node | null = null;
+    private _headerBgNode: Node | null = null;
     private _sfx: GameSfxConfig | null = null;
     private _audioSource: AudioSource | null = null;
     private _noConnectCfg: NoConnectDialogConfig | null = null;
@@ -179,7 +187,7 @@ export class GameView extends Component {
 
     beginOrRestartLevel(level: number) {
         this._level = Math.max(1, Math.floor(level));
-        if (this._levelLabel) this._levelLabel.string = `第 ${this._level} 关`;
+        if (this._levelLabel) this._levelLabel.string = this._levelLabelText(this._level);
         if (!this._board) {
             this._pendingStartLevel = this._level;
             return;
@@ -256,6 +264,28 @@ export class GameView extends Component {
             sp.spriteFrame = sf;
             sp.enabled = true;
         }
+        this.scheduleOnce(() => this.relayout(), 0);
+    }
+
+    /** 游戏页顶栏页眉背景，由 GameApp 注入 */
+    setGameHeaderBackground(sf: SpriteFrame | null) {
+        this._gameHeaderBackground = sf;
+        if (!this._topBarNode?.isValid) return;
+        if (!sf) {
+            this._headerBgNode?.destroy();
+            this._headerBgNode = null;
+            return;
+        }
+        if (this._headerBgNode?.isValid) {
+            const sp = this._headerBgNode.getComponent(Sprite);
+            if (sp) {
+                sp.spriteFrame = sf;
+                sp.enabled = true;
+            }
+            this.scheduleOnce(() => this.relayout(), 0);
+            return;
+        }
+        this._mountHeaderBg(this.node, sf);
         this.scheduleOnce(() => this.relayout(), 0);
     }
 
@@ -336,6 +366,14 @@ export class GameView extends Component {
             bg.getComponent(Widget)?.updateAlignment();
             const sp = bg.getComponent(Sprite);
             if (sp) sp.sizeMode = Sprite.SizeMode.CUSTOM;
+        }
+        const headerBg = this._headerBgNode;
+        if (headerBg?.isValid) {
+            this._layoutHeaderBgNode(headerBg);
+        }
+        const lvlN = this._topBarNode?.getChildByName('Level');
+        if (lvlN?.isValid) {
+            this._layoutLevelLabelNode(lvlN);
         }
         if (this._board && !this._board.isDealing()) {
             this._board.resizeToParent();
@@ -444,12 +482,17 @@ export class GameView extends Component {
         this._applyDeckToBoard();
         this._wireBoardCallbacks();
 
-        // 子节点顺序：GameRoot 下 GameBg(若有) → BoardHolder → TopBar → BottomBar
+        // 子节点顺序：GameRoot 下 GameBg(若有) → HeaderBg(若有) → BoardHolder → TopBar → BottomBar
+
+        if (this._gameHeaderBackground) {
+            this._mountHeaderBg(root, this._gameHeaderBackground);
+        }
 
         const top = new Node('TopBar');
         top.setParent(root);
+        this._topBarNode = top;
         const topUt = top.addComponent(UITransform);
-        topUt.setContentSize(vs.width, 88);
+        topUt.setContentSize(vs.width, TOP_BAR_H);
         const topW = top.addComponent(Widget);
         topW.isAlignTop = true;
         topW.isAlignLeft = true;
@@ -458,23 +501,22 @@ export class GameView extends Component {
         topW.left = topW.right = 0;
         topW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
         topW.updateAlignment();
-        addCenterFillRect(top, vs.width, 88, C_BAR);
 
         const lvlN = new Node('Level');
         lvlN.setParent(top);
         const ll = lvlN.addComponent(Label);
-        ll.string = `第 ${this._level} 关`;
-        ll.color = new Color(0xe0, 0xe1, 0xdd, 255);
-        ll.fontSize = 28;
+        ll.string = this._levelLabelText(this._level);
+        ll.color = Color.WHITE;
+        ll.fontSize = 29;
+        this._applyLabelOutline(ll);
         ll.horizontalAlign = Label.HorizontalAlign.CENTER;
         ll.verticalAlign = Label.VerticalAlign.CENTER;
         lvlN.addComponent(UITransform).setContentSize(400, 60);
-        lvlN.setPosition(0, 0, 0);
         const lvlW = lvlN.addComponent(Widget);
         lvlW.isAlignHorizontalCenter = true;
         lvlW.isAlignVerticalCenter = true;
         lvlW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
-        lvlW.updateAlignment();
+        this._layoutLevelLabelNode(lvlN);
         this._levelLabel = ll;
 
         const backN = new Node('Back');
@@ -517,7 +559,7 @@ export class GameView extends Component {
             const n = new Node(name);
             n.setParent(bottom);
             n.addComponent(UITransform).setContentSize(200, 72);
-            n.setPosition(x, 28, 0);
+            n.setPosition(x, BOTTOM_TOOL_BTN_Y, 0);
             if (sf) {
                 n.addComponent(Sprite);
             }
@@ -547,7 +589,7 @@ export class GameView extends Component {
             const lv = this._pendingStartLevel;
             this._pendingStartLevel = null;
             this._level = lv;
-            if (this._levelLabel) this._levelLabel.string = `第 ${lv} 关`;
+            if (this._levelLabel) this._levelLabel.string = this._levelLabelText(lv);
             this._buildLevelGen++;
             if (this._board) this._runBuildLevel(this._board);
         }
@@ -589,7 +631,7 @@ export class GameView extends Component {
             this._playSfx(this._sfx?.connect);
         };
         this._board.onSelectSfx = () => {
-            this._playSfx(this._sfx?.select);
+            this._playSfx(this._sfx?.select, 0.7);
         };
         this._board.onNoConnectablePair = this._noConnectCfg
             ? () => {
@@ -658,6 +700,57 @@ export class GameView extends Component {
         }, delay);
     }
 
+    private _levelLabelText(level: number): string {
+        return String(Math.max(1, Math.floor(level)));
+    }
+
+    private _layoutLevelLabelNode(lvlN: Node) {
+        const lvlW = lvlN.getComponent(Widget);
+        lvlW?.updateAlignment();
+        const pos = lvlN.position;
+        lvlN.setPosition(pos.x + LEVEL_LABEL_OFFSET_X, pos.y + LEVEL_LABEL_OFFSET_Y, pos.z);
+    }
+
+    private _headerBgSiblingIndex(): number {
+        return this._gameBgNode?.isValid ? 1 : 0;
+    }
+
+    private _headerBgSize(): { w: number; h: number } {
+        const rootUt = this.node.getComponent(UITransform);
+        const vs = getStableVisibleSize();
+        const rootW = rootUt && rootUt.width > 1 ? rootUt.width : vs.width;
+        return { w: rootW * 0.5, h: TOP_BAR_H + HEADER_BG_H_EXTRA };
+    }
+
+    private _layoutHeaderBgNode(headerBg: Node) {
+        const { w, h } = this._headerBgSize();
+        const hUt = headerBg.getComponent(UITransform);
+        if (hUt) hUt.setContentSize(w, h);
+        let hW = headerBg.getComponent(Widget);
+        if (!hW) hW = headerBg.addComponent(Widget);
+        hW.isAlignLeft = hW.isAlignRight = hW.isAlignBottom = false;
+        hW.isAlignHorizontalCenter = true;
+        hW.isAlignTop = true;
+        hW.top = 0;
+        hW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
+        hW.updateAlignment();
+        const hSp = headerBg.getComponent(Sprite);
+        if (hSp) hSp.sizeMode = Sprite.SizeMode.CUSTOM;
+    }
+
+    private _mountHeaderBg(root: Node, sf: SpriteFrame) {
+        const headerBg = new Node('HeaderBg');
+        headerBg.setParent(root);
+        headerBg.setSiblingIndex(this._headerBgSiblingIndex());
+        headerBg.addComponent(UITransform);
+        const hSp = headerBg.addComponent(Sprite);
+        hSp.spriteFrame = sf;
+        hSp.sizeMode = Sprite.SizeMode.CUSTOM;
+        hSp.color = Color.WHITE;
+        this._headerBgNode = headerBg;
+        this._layoutHeaderBgNode(headerBg);
+    }
+
     private _ensureAudioSource(): AudioSource | null {
         if (this._audioSource?.isValid) return this._audioSource;
         let a = this.node.getComponent(AudioSource);
@@ -669,10 +762,10 @@ export class GameView extends Component {
         return a;
     }
 
-    private _playSfx(clip: AudioClip | null | undefined) {
+    private _playSfx(clip: AudioClip | null | undefined, volume = 1) {
         if (!clip) return;
         const src = this._ensureAudioSource();
-        if (src) src.playOneShot(clip, 1);
+        if (src) src.playOneShot(clip, volume);
     }
 
     /**

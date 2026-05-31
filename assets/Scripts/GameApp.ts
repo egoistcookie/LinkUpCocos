@@ -1,6 +1,7 @@
 import {
     _decorator,
     AudioClip,
+    AudioSource,
     Camera,
     Canvas,
     Color,
@@ -65,6 +66,10 @@ export class GameApp extends Component {
     @property(SpriteFrame)
     gameBackground: SpriteFrame | null = null;
 
+    /** 可选：游戏页顶栏页眉背景；不赋值则顶栏无底色条，仅居中显示关卡数 */
+    @property(SpriteFrame)
+    gameHeaderBackground: SpriteFrame | null = null;
+
     /**
      * 棋盘格子贴图：第 i 项对应「i+1 号」类型。
      * 若 32 项都配置了贴图：与原先一致，无贴图槽位不会用到。
@@ -115,6 +120,9 @@ export class GameApp extends Component {
     /** 通关结算弹窗出现时播放（可选） */
     @property(AudioClip)
     sfxLevelClear: AudioClip | null = null;
+    /** 背景音乐；配置后在游戏启动后循环播放 */
+    @property({ type: AudioClip, tooltip: '游戏启动后循环播放；不配置则不播放' })
+    bgm: AudioClip | null = null;
 
     /** 通关结算弹窗底板图；不配置则用深色纯色块 */
     @property(SpriteFrame)
@@ -238,6 +246,7 @@ export class GameApp extends Component {
     private _shopGroups: ShopCatalogGroup[] = [];
     /** 防止连点卡组/商店时在主线程重复构建弹窗 */
     private _homeDialogOpening = false;
+    private _bgmSource: AudioSource | null = null;
 
     onLoad() {
         linkLog('GameApp.onLoad', 'begin', { node: nodePath(this.node), active: this.node.active });
@@ -311,6 +320,7 @@ export class GameApp extends Component {
             };
             this._game.setToolButtonSprites(toolBtns);
             this._game.setGameBackground(this.gameBackground);
+            this._game.setGameHeaderBackground(this.gameHeaderBackground);
             const sfx: GameSfxConfig = {
                 connect: this.sfxConnect,
                 select: this.sfxSelect,
@@ -329,7 +339,38 @@ export class GameApp extends Component {
             this._applyLevelClearDialog();
         }
         this._refreshHomeCoins();
+        this._startBgm();
         this.scheduleOnce(() => this._debugPipelineSnapshot('GameApp.start+0'), 0);
+    }
+
+    onDestroy() {
+        this._bgmSource?.stop();
+    }
+
+    private _ensureBgmSource(): AudioSource | null {
+        if (this._bgmSource?.isValid) return this._bgmSource;
+        let a = this.node.getComponent(AudioSource);
+        if (!a) {
+            a = this.node.addComponent(AudioSource);
+        }
+        a.playOnAwake = false;
+        a.loop = true;
+        this._bgmSource = a;
+        return a;
+    }
+
+    /** 启动循环背景音乐（挂载在 App 节点，首页与游戏页切换时不中断） */
+    private _startBgm() {
+        if (!this.bgm) return;
+        const src = this._ensureBgmSource();
+        if (!src) return;
+        if (src.clip === this.bgm && src.playing) return;
+        src.stop();
+        src.clip = this.bgm;
+        src.loop = true;
+        const duration = this.bgm.getDuration();
+        src.currentTime = duration > 10 ? 10 : 0;
+        src.play();
     }
 
     private _rebuildShopCatalog() {

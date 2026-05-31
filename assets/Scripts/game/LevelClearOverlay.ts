@@ -128,7 +128,7 @@ function mkConnectCountRow(parent: Node, x: number, y: number, count: number) {
     cx += numW + midGap;
 
     const sufN = mkRoundLabel(row, '次', C_ROUND_TEXT, ROUND_FONT_SIZE);
-    sufN.setPosition(cx + sufW / 2, 0, 0);
+    sufN.setPosition(cx + sufW / 2 + 2, 0, 0);
 }
 
 function mountLevelClearSpriteButton(
@@ -305,10 +305,10 @@ export function openLevelClearOverlay(
     if (opts.coinAmount > 0) {
         const amtN = new Node('CoinAmt');
         amtN.setParent(panel);
-        amtN.setPosition(55, coinBaseY + 137, 0);
+        amtN.setPosition(50, coinBaseY + 137, 0);
         amtN.addComponent(UITransform).setContentSize(panelW - 56, 40);
         const al = amtN.addComponent(Label);
-        al.string = `+${opts.coinAmount} 金币`;
+        al.string = `+${opts.coinAmount}`;
         al.fontSize = 31;
         al.color = C_TITLE;
         al.horizontalAlign = Label.HorizontalAlign.CENTER;

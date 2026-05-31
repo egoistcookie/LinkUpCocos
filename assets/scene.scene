@@ -286,11 +286,15 @@
     "_enabled": true,
     "__prefab": null,
     "homeBackground": {
-      "__uuid__": "6bf64214-3202-445d-bc3c-56d1078325e0@f9941",
+      "__uuid__": "554b99cf-1da7-4191-88e3-a496a7369e43@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "gameBackground": {
       "__uuid__": "28a7ca7e-5859-45dd-b71f-bfaeaeb35400@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
+    "gameHeaderBackground": {
+      "__uuid__": "02c2997c-1683-4914-bde0-a03a86b9415e@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "tileFaceSprites": [
@@ -456,17 +460,21 @@
       "__expectedType__": "cc.SpriteFrame"
     },
     "sfxConnect": {
-      "__uuid__": "ee7deb7e-543e-4ed7-98a4-c3353fda72dc",
+      "__uuid__": "984417ed-b2ec-4d1c-b9c1-768322ef29b8",
       "__expectedType__": "cc.AudioClip"
     },
     "sfxSelect": {
-      "__uuid__": "fcfe5937-903b-48f6-8853-ea260522edf6",
+      "__uuid__": "7d8188b8-924a-4449-bb2e-77183c111a8e",
       "__expectedType__": "cc.AudioClip"
     },
     "sfxHint": null,
     "sfxRefresh": null,
     "sfxEliminate": null,
     "sfxLevelClear": null,
+    "bgm": {
+      "__uuid__": "8c38482c-84fb-4a02-9e63-614a92bb364b",
+      "__expectedType__": "cc.AudioClip"
+    },
     "levelClearPanelBg": {
       "__uuid__": "fe4d00c5-f073-4ec9-a07a-599ad15a4db1@f9941",
       "__expectedType__": "cc.SpriteFrame"
