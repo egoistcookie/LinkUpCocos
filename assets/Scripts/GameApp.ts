@@ -58,186 +58,145 @@ const { ccclass, property } = _decorator;
 
 @ccclass('GameApp')
 export class GameApp extends Component {
-    /** 可选：序列帧全屏背景；不赋值则首页无 Bg 节点，白底仅由 UICamera 清屏色提供（避免全屏 Sprite 挡按钮） */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '首页全屏背景图；不配置则首页无背景图，使用摄像机白底清屏' })
     homeBackground: SpriteFrame | null = null;
 
-    /** 可选：游戏主体页全屏背景；不赋值则与现有一致（顶栏/棋盘区/底栏各自底色，其余为摄像机清屏色） */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页全屏背景图；不配置则顶栏/棋盘/底栏各自底色' })
     gameBackground: SpriteFrame | null = null;
 
-    /** 可选：游戏页顶栏页眉背景；不赋值则顶栏无底色条，仅居中显示关卡数 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页顶栏页眉背景；不配置则顶栏无底色条' })
     gameHeaderBackground: SpriteFrame | null = null;
 
-    /**
-     * 棋盘格子贴图：第 i 项对应「i+1 号」类型。
-     * 若 32 项都配置了贴图：与原先一致，无贴图槽位不会用到。
-     * 若未满 32 种：盘面只生成已配置的类型、不显示数字；未配置的槽位不参与发牌。
-     */
     @property({
         type: [SpriteFrame],
-        tooltip: `共 ${TILE_SPRITE_SLOTS} 项：索引 0→1号 …；卡组模式由商店配置映射到槽位`,
+        tooltip: `棋盘格子贴图，共 ${TILE_SPRITE_SLOTS} 项：索引 0 对应 1 号类型；卡组模式由商店配置映射`,
     })
     tileFaceSprites: Array<SpriteFrame | null> = [];
 
-    /** 游戏页：返回（普通 / 按下） */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页返回按钮（正常态）' })
     toolBtnBackNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页返回按钮（按下态）' })
     toolBtnBackPressed: SpriteFrame | null = null;
-    /** 提示 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页提示按钮（正常态）' })
     toolBtnHintNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页提示按钮（按下态）' })
     toolBtnHintPressed: SpriteFrame | null = null;
-    /** 刷新 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页刷新按钮（正常态）' })
     toolBtnRefreshNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页刷新按钮（按下态）' })
     toolBtnRefreshPressed: SpriteFrame | null = null;
-    /** 消除 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页消除按钮（正常态）' })
     toolBtnEliminateNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '游戏页消除按钮（按下态）' })
     toolBtnEliminatePressed: SpriteFrame | null = null;
 
-    /** 连线成功消除一对时播放（可选） */
-    @property(AudioClip)
+    @property({ type: AudioClip, tooltip: '连线成功消除一对时播放；不配置则不播放' })
     sfxConnect: AudioClip | null = null;
-    /** 选中棋盘方块时播放（可选） */
-    @property(AudioClip)
+    @property({ type: AudioClip, tooltip: '选中棋盘方块时播放；不配置则不播放' })
     sfxSelect: AudioClip | null = null;
-    /** 点击「提示」 */
-    @property(AudioClip)
+    @property({ type: AudioClip, tooltip: '点击提示道具时播放；不配置则不播放' })
     sfxHint: AudioClip | null = null;
-    /** 点击「刷新」 */
-    @property(AudioClip)
+    @property({ type: AudioClip, tooltip: '点击刷新道具时播放；不配置则不播放' })
     sfxRefresh: AudioClip | null = null;
-    /** 点击「消除」 */
-    @property(AudioClip)
+    @property({ type: AudioClip, tooltip: '点击消除道具时播放；不配置则不播放' })
     sfxEliminate: AudioClip | null = null;
-    /** 通关结算弹窗出现时播放（可选） */
-    @property(AudioClip)
+    @property({ type: AudioClip, tooltip: '通关结算弹窗出现时播放；不配置则不播放' })
     sfxLevelClear: AudioClip | null = null;
-    /** 背景音乐；配置后在游戏启动后循环播放 */
-    @property({ type: AudioClip, tooltip: '游戏启动后循环播放；不配置则不播放' })
+    @property({ type: AudioClip, tooltip: '游戏启动后循环播放的背景音乐；不配置则不播放' })
     bgm: AudioClip | null = null;
 
-    /** 通关结算弹窗底板图；不配置则用深色纯色块 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '通关结算弹窗底板图；不配置则用深色纯色块' })
     levelClearPanelBg: SpriteFrame | null = null;
-    /**
-     * 通关庆祝动画帧：在结算弹窗下层、画面上半区循环播放；
-     * 点击「返回首页」或「下一关」后停止。
-     */
-    @property({ type: [SpriteFrame], tooltip: '通关结算上半屏循环动画帧（按顺序播放）' })
+    @property({ type: [SpriteFrame], tooltip: '通关结算上半屏循环庆祝动画帧（按顺序播放）' })
     levelClearAnimFrames: SpriteFrame[] = [];
-    @property({ tooltip: '庆祝动画帧率（帧/秒）' })
+    @property({ tooltip: '通关庆祝动画帧率（帧/秒）' })
     levelClearAnimFps = 12;
-    /** 通关结算：返回首页（普通 / 按下），不配置则用纯色底、无文字 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '通关结算「返回首页」按钮（正常态）' })
     levelClearBtnHomeNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '通关结算「返回首页」按钮（按下态）' })
     levelClearBtnHomePressed: SpriteFrame | null = null;
-    /** 通关结算：下一关（普通 / 按下），不配置则用纯色底、无文字 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '通关结算「下一关」按钮（正常态）' })
     levelClearBtnNextNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '通关结算「下一关」按钮（按下态）' })
     levelClearBtnNextPressed: SpriteFrame | null = null;
 
-    /** 场上无可连对时弹窗主文案 */
-    @property
+    @property({ tooltip: '场上无可连对时弹窗主文案' })
     noConnectDialogMessage = '场上没有可连线方块，自动刷新';
-    /** 弹窗副标题（可留空） */
-    @property
+    @property({ tooltip: '场上无可连对时弹窗副标题（可留空）' })
     noConnectDialogTitle = '';
-    /** 弹窗展示多少秒后自动执行洗牌（秒） */
-    @property
+    @property({ tooltip: '无可连对弹窗展示多少秒后自动洗牌（秒）' })
     noConnectDialogAutoDelay = 1.2;
-    /** 弹窗底板图；不配置则用深色纯色块 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '无可连对弹窗底板图；不配置则用深色纯色块' })
     noConnectDialogPanelBg: SpriteFrame | null = null;
 
-    /** 首页：开始游戏（普通 / 按下），不配置则用纯色底 + 文字 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '首页开始游戏按钮（正常态）；不配置则用纯色底+文字' })
     homeBtnStartNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '首页开始游戏按钮（按下态）' })
     homeBtnStartPressed: SpriteFrame | null = null;
-    /** 配置卡组 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '首页配置卡组按钮（正常态）' })
     homeBtnDeckNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '首页配置卡组按钮（按下态）' })
     homeBtnDeckPressed: SpriteFrame | null = null;
-    /** 商店 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '首页商店按钮（正常态）' })
     homeBtnShopNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '首页商店按钮（按下态）' })
     homeBtnShopPressed: SpriteFrame | null = null;
-    /** 配置卡组弹窗底板；不配置则用与项目样式一致的深色底板 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '配置卡组弹窗底板；不配置则用深色底板' })
     deckDialogPanelBg: SpriteFrame | null = null;
-    /** 商店弹窗底板；不配置则用深色底板 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '商店弹窗底板；不配置则用深色底板' })
     shopDialogPanelBg: SpriteFrame | null = null;
 
-    /** 弹窗「确定」按钮（普通 / 按下） */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '弹窗确定按钮（正常态）' })
     dialogBtnOkNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '弹窗确定按钮（按下态）' })
     dialogBtnOkPressed: SpriteFrame | null = null;
-    /** 弹窗「取消」按钮 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '弹窗取消按钮（正常态）' })
     dialogBtnCancelNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '弹窗取消按钮（按下态）' })
     dialogBtnCancelPressed: SpriteFrame | null = null;
-    /** 弹窗「关闭」按钮（商店底栏等） */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '弹窗关闭按钮（正常态）' })
     dialogBtnCloseNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '弹窗关闭按钮（按下态）' })
     dialogBtnClosePressed: SpriteFrame | null = null;
 
-    /** 商店内「购买」按钮（普通 / 按下） */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '商店内购买按钮（正常态）' })
     shopBtnBuyNormal: SpriteFrame | null = null;
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '商店内购买按钮（按下态）' })
     shopBtnBuyPressed: SpriteFrame | null = null;
-    /** 商店内「已拥有」标签贴图 */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '商店内已拥有标签贴图' })
     shopBtnOwnedLabel: SpriteFrame | null = null;
 
-    /** 金币图标（首页与商店内展示） */
-    @property(SpriteFrame)
+    @property({ type: SpriteFrame, tooltip: '金币图标（首页与商店内展示）' })
     coinIcon: SpriteFrame | null = null;
 
-    /** 测试模式：开启后游戏内提示/刷新/消除道具不消耗库存，可无限使用 */
-    @property({
-        tooltip: '开启后游戏内提示、刷新、消除道具不扣次数，可无限使用',
-    })
+    @property({ type: SpriteFrame, tooltip: '暗牌背面贴图；不配置则运行时从 resources/cube/暗牌 加载' })
+    hiddenTileSprite: SpriteFrame | null = null;
+
+    @property({ type: AudioClip, tooltip: '暗牌翻转显露本来图案时播放；不配置则不播放' })
+    sfxHiddenFlip: AudioClip | null = null;
+
+    @property({ tooltip: '测试模式：开启后提示/刷新/消除道具不扣次数，可无限使用' })
     testMode = false;
 
-    /** 商店：陆地动物方块（配置多少种展示多少种，每种 10 金币） */
-    @property({ type: [SpriteFrame], tooltip: '陆地动物方块贴图列表' })
+    @property({ tooltip: '测试模式开启时，开始游戏从此关卡进入；通关后仍按 +1 进入下一关' })
+    testLevel = 1;
+
+    @property({ type: [SpriteFrame], tooltip: '商店陆地动物方块贴图列表（配置多少种展示多少种，每种 10 金币）' })
     shopLandAnimalSprites: SpriteFrame[] = [];
 
-    /** 商店：水生动物方块 */
-    @property({ type: [SpriteFrame], tooltip: '水生动物方块贴图列表' })
+    @property({ type: [SpriteFrame], tooltip: '商店水生动物方块贴图列表' })
     shopAquaticAnimalSprites: SpriteFrame[] = [];
 
-    /** 商店：水果方块 */
-    @property({ type: [SpriteFrame], tooltip: '水果方块贴图列表' })
+    @property({ type: [SpriteFrame], tooltip: '商店水果方块贴图列表' })
     shopFruitSprites: SpriteFrame[] = [];
 
-    /** 商店：零食方块 */
-    @property({ type: [SpriteFrame], tooltip: '零食方块贴图列表' })
+    @property({ type: [SpriteFrame], tooltip: '商店零食方块贴图列表' })
     shopSnackSprites: SpriteFrame[] = [];
 
-    /** 商店：蔬菜方块 */
-    @property({ type: [SpriteFrame], tooltip: '蔬菜方块贴图列表' })
+    @property({ type: [SpriteFrame], tooltip: '商店蔬菜方块贴图列表' })
     shopVegetableSprites: SpriteFrame[] = [];
 
-    /** 商店：面点方块 */
-    @property({ type: [SpriteFrame], tooltip: '面点方块贴图列表' })
+    @property({ type: [SpriteFrame], tooltip: '商店面点方块贴图列表' })
     shopPastrySprites: SpriteFrame[] = [];
 
     private _home: HomeView | null = null;
@@ -327,8 +286,10 @@ export class GameApp extends Component {
                 hint: this.sfxHint,
                 refresh: this.sfxRefresh,
                 eliminate: this.sfxEliminate,
+                hiddenFlip: this.sfxHiddenFlip,
             };
             this._game.setGameSfx(sfx);
+            this._game.setHiddenTileSprite(this.hiddenTileSprite);
             const noConnect: NoConnectDialogConfig = {
                 message: this.noConnectDialogMessage,
                 title: this.noConnectDialogTitle,
@@ -448,11 +409,20 @@ export class GameApp extends Component {
         this._enterHome();
     }
 
+    private _resolveStartLevel(): number {
+        if (this.testMode) {
+            return Math.max(1, Math.floor(this.testLevel));
+        }
+        return loadCurrentLevel();
+    }
+
     /** 关卡通关：发放金币并打开结算页 */
     private _onLevelWin(connectCount: number) {
         const level = this._game?.getLevel() ?? 1;
         const nextLevel = level + 1;
-        saveCurrentLevel(nextLevel);
+        if (!this.testMode) {
+            saveCurrentLevel(nextLevel);
+        }
         if (connectCount > 0) {
             addCoins(connectCount);
             this._refreshHomeCoins();
@@ -631,10 +601,11 @@ export class GameApp extends Component {
             this._game.onLevelWin = (count) => this._onLevelWin(count);
             this._syncGameModeFlags();
             this._applyLevelClearDialog();
+            this._game.setHiddenTileSprite(this.hiddenTileSprite);
             this._game.setTileFaceSprites(this._getTileFacesForGame());
             this._syncDeckToGameView();
             this._game.node.active = true;
-            this._game.beginOrRestartLevel(loadCurrentLevel());
+            this._game.beginOrRestartLevel(this._resolveStartLevel());
         }
     }
 

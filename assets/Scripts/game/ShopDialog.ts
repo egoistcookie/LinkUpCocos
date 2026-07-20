@@ -57,10 +57,16 @@ const C_ACCENT = new Color(0xe9, 0xc4, 0x6a, 255);
 const C_BTN = new Color(0x2d, 0x6a, 0x4f, 255);
 const C_BTN_OWNED = new Color(0x41, 0x5a, 0x77, 200);
 
-const BLOCK_COL_W = 92;
-const BLOCK_FACE_H = 76;
-const BLOCK_PRICE_H = 22;
-const BLOCK_BTN_H = 32;
+const BLOCK_COL_W = 116;
+const BLOCK_FACE_H = 80;
+const BLOCK_PRICE_H = 24;
+const BLOCK_BTN_W = 108;
+const BLOCK_BTN_H = 40;
+const BLOCK_BTN_FONT = 19;
+const BLOCK_OWNED_FONT = 15;
+const BLOCK_PRICE_FONT = 15;
+/** 商店按钮文字描边 */
+const SHOP_BTN_OUTLINE_W = 2;
 /** 贴图底边到「10 金币」的间距（较原先拉近 5px） */
 const FACE_TO_PRICE_GAP = 3;
 const BLOCK_ROW_STEP = BLOCK_FACE_H + FACE_TO_PRICE_GAP + BLOCK_PRICE_H + BLOCK_BTN_H + 12;
@@ -259,6 +265,25 @@ export class ShopDialog extends Component {
         node.on(Node.EventType.TOUCH_CANCEL, toNormal, node);
     }
 
+    private _styleShopBtnLabel(lab: Label, text: string, fontSize: number) {
+        lab.string = text;
+        lab.fontSize = fontSize;
+        lab.color = Color.WHITE;
+        lab.isBold = false;
+        lab.horizontalAlign = Label.HorizontalAlign.CENTER;
+        lab.verticalAlign = Label.VerticalAlign.CENTER;
+        applyLabelBlackOutline(lab, SHOP_BTN_OUTLINE_W);
+    }
+
+    private _addShopBtnLabel(parent: Node, w: number, h: number, text: string, fontSize: number): Label {
+        const blN = new Node('Label');
+        blN.setParent(parent);
+        blN.addComponent(UITransform).setContentSize(w, h);
+        const bl = blN.addComponent(Label);
+        this._styleShopBtnLabel(bl, text, fontSize);
+        return bl;
+    }
+
     /** 购买按钮：有贴图则用图（含按下态），否则绿底 +「购买」 */
     private _mkBuyButton(parent: Node, y: number, w: number, h: number, onClick: () => void): Node {
         const btnN = new Node('Buy');
@@ -266,6 +291,7 @@ export class ShopDialog extends Component {
         btnN.setPosition(0, y, 0);
         btnN.addComponent(UITransform).setContentSize(w, h);
 
+        const fontSize = w >= 90 ? BLOCK_BTN_FONT : BLOCK_OWNED_FONT;
         const sprites = this._opts.shopButtons;
         const buySf = sprites?.buyNormal ?? null;
         if (buySf) {
@@ -277,22 +303,14 @@ export class ShopDialog extends Component {
             const bgN = new Node('Bg');
             bgN.setParent(btnN);
             addCenterFillRect(bgN, w, h, C_BTN);
-            const blN = new Node('Label');
-            blN.setParent(btnN);
-            blN.addComponent(UITransform).setContentSize(w, h);
-            const bl = blN.addComponent(Label);
-            bl.string = '购买';
-            bl.fontSize = w >= 90 ? 18 : 14;
-            bl.color = Color.WHITE;
-            bl.horizontalAlign = Label.HorizontalAlign.CENTER;
-            bl.verticalAlign = Label.VerticalAlign.CENTER;
             this._bindClick(btnN, w, h, onClick);
         }
+        this._addShopBtnLabel(btnN, w, h, '购买', fontSize);
         return btnN;
     }
 
     /** 已拥有标签：有贴图则用图，否则灰底 +「已拥有」 */
-    private _mkOwnedBadge(parent: Node, y: number, w = 76, h = BLOCK_BTN_H): Node {
+    private _mkOwnedBadge(parent: Node, y: number, w = BLOCK_BTN_W, h = BLOCK_BTN_H): Node {
         const btnN = new Node('Owned');
         btnN.setParent(parent);
         btnN.setPosition(0, y, 0);
@@ -305,16 +323,8 @@ export class ShopDialog extends Component {
             const bgN = new Node('Bg');
             bgN.setParent(btnN);
             addCenterFillRect(bgN, w, h, C_BTN_OWNED);
-            const blN = new Node('Label');
-            blN.setParent(btnN);
-            blN.addComponent(UITransform).setContentSize(w, h);
-            const bl = blN.addComponent(Label);
-            bl.string = '已拥有';
-            bl.fontSize = 14;
-            bl.color = new Color(0xc8, 0xd0, 0xd8, 255);
-            bl.horizontalAlign = Label.HorizontalAlign.CENTER;
-            bl.verticalAlign = Label.VerticalAlign.CENTER;
         }
+        this._addShopBtnLabel(btnN, w, h, '已拥有', BLOCK_OWNED_FONT);
         return btnN;
     }
 
@@ -566,9 +576,10 @@ export class ShopDialog extends Component {
             nameN.addComponent(UITransform).setContentSize(cellW, 24);
             const nl = nameN.addComponent(Label);
             nl.string = p.title;
-            nl.fontSize = 20;
+            nl.fontSize = 21;
             nl.color = Color.WHITE;
             nl.horizontalAlign = Label.HorizontalAlign.CENTER;
+            applyLabelBlackOutline(nl);
 
             const priceN = new Node('Price');
             priceN.setParent(cell);
@@ -576,9 +587,11 @@ export class ShopDialog extends Component {
             priceN.addComponent(UITransform).setContentSize(cellW, 22);
             const pl = priceN.addComponent(Label);
             pl.string = `${PROP_PRICE} 金币`;
-            pl.fontSize = 16;
+            pl.fontSize = BLOCK_PRICE_FONT;
             pl.color = C_ACCENT;
+            pl.isBold = true;
             pl.horizontalAlign = Label.HorizontalAlign.CENTER;
+            applyLabelBlackOutline(pl);
 
             const stockN = new Node('Stock');
             stockN.setParent(cell);
@@ -587,10 +600,11 @@ export class ShopDialog extends Component {
             const sl = stockN.addComponent(Label);
             sl.string = `拥有 ${counts[p.kind]}`;
             sl.fontSize = 14;
-            sl.color = new Color(0xa8, 0xd5, 0xba, 255);
+            sl.color = Color.WHITE;
             sl.horizontalAlign = Label.HorizontalAlign.CENTER;
+            applyLabelBlackOutline(sl, SHOP_BTN_OUTLINE_W);
 
-            this._mkBuyButton(cell, -88 - PROP_STOCK_TO_BTN_GAP, 100, 36, () => {
+            this._mkBuyButton(cell, -88 - PROP_STOCK_TO_BTN_GAP, BLOCK_BTN_W, BLOCK_BTN_H, () => {
                 if (purchaseProp(p.kind)) {
                     sl.string = `拥有 ${loadPropCounts()[p.kind]}`;
                     this._notifyCoins();
@@ -678,10 +692,12 @@ export class ShopDialog extends Component {
         priceN.addComponent(UITransform).setContentSize(BLOCK_COL_W, BLOCK_PRICE_H);
         const pl = priceN.addComponent(Label);
         pl.string = `${item.price} 金币`;
-        pl.fontSize = 14;
+        pl.fontSize = BLOCK_PRICE_FONT;
         pl.color = C_ACCENT;
+        pl.isBold = true;
         pl.horizontalAlign = Label.HorizontalAlign.CENTER;
         pl.verticalAlign = Label.VerticalAlign.CENTER;
+        applyLabelBlackOutline(pl);
 
         const btnY = priceY - BLOCK_PRICE_H / 2 - BLOCK_BTN_H / 2 - 4;
         const owned = isShopBlockOwned(item.shopKey);
@@ -689,7 +705,7 @@ export class ShopDialog extends Component {
         if (owned) {
             this._mkOwnedBadge(cell, btnY);
         } else {
-            const btnN = this._mkBuyButton(cell, btnY, 76, BLOCK_BTN_H, () => {
+            const btnN = this._mkBuyButton(cell, btnY, BLOCK_BTN_W, BLOCK_BTN_H, () => {
                 const result = purchaseShopBlock(item.shopKey);
                 if (result === 'success') {
                     btnN.destroy();

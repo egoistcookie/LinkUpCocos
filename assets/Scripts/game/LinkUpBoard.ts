@@ -35,25 +35,27 @@ export const TYPE_COUNT = 40;
 export const TILE_SPRITE_SLOTS = 40;
 
 export type GravityDir = 'left' | 'right' | 'up' | 'down';
+/** 由垂直中线向上下靠齐 / 由水平中线向左右靠齐 */
+export type GravityMode = GravityDir | 'split-v' | 'split-h';
 
-const GRAVITY_DIR_TIPS: Record<GravityDir, string> = {
+const GRAVITY_MODE_TIPS: Record<GravityMode, string> = {
     left: '方块消除后，同行剩余方块会向左靠齐',
     right: '方块消除后，同行剩余方块会向右靠齐',
     up: '方块消除后，同列剩余方块会向上靠齐',
     down: '方块消除后，同列剩余方块会向下靠齐',
+    'split-v': '方块消除后，剩余方块会由垂直中线向上下靠齐',
+    'split-h': '方块消除后，剩余方块会由水平中线向左右靠齐',
 };
 
-/** 第 6 关起：由关卡号确定四向之一（同关重开方向不变） */
-function randomGravityDirForLevel(level: number): GravityDir {
-    const dirs: GravityDir[] = ['left', 'right', 'up', 'down'];
-    const idx = ((level * 2654435761) >>> 0) % 4;
-    return dirs[idx];
+/** 关卡机制按 7 关一轮循环：1 无 / 2 左 / 3 右 / 4 上 / 5 下 / 6 中线上下 / 7 中线左右 */
+function levelPatternIndex(level: number): number {
+    const lv = Math.max(1, Math.floor(level));
+    return ((lv - 1) % 7) + 1;
 }
 
-/** 本关消除后方块靠齐方向；第 1 关无，2–5 关固定教学，第 6 关起每关随机四向之一 */
-export function getGravityDirForLevel(level: number): GravityDir | null {
-    const lv = Math.max(1, Math.floor(level));
-    switch (lv) {
+/** 本关消除后方块靠齐方式；第 8 关起与 1–7 关重复同一顺序 */
+export function getGravityModeForLevel(level: number): GravityMode | null {
+    switch (levelPatternIndex(level)) {
         case 2:
             return 'left';
         case 3:
@@ -62,16 +64,56 @@ export function getGravityDirForLevel(level: number): GravityDir | null {
             return 'up';
         case 5:
             return 'down';
+        case 6:
+            return 'split-v';
+        case 7:
+            return 'split-h';
         default:
-            return lv >= 6 ? randomGravityDirForLevel(lv) : null;
+            return null;
     }
+}
+
+/** @deprecated 使用 getGravityModeForLevel */
+export function getGravityDirForLevel(level: number): GravityDir | null {
+    const mode = getGravityModeForLevel(level);
+    if (!mode || mode === 'split-v' || mode === 'split-h') return null;
+    return mode;
 }
 
 /** 进入关卡时的机制说明（第 1 关无；未配置的关卡返回 null） */
 export function getLevelEnterTip(level: number): string | null {
-    const dir = getGravityDirForLevel(level);
-    return dir ? GRAVITY_DIR_TIPS[dir] : null;
+    if (hasHiddenTilesForLevel(level)) {
+        return '暗牌不可消除，相邻方块被消除后暗牌会翻转';
+    }
+    const mode = getGravityModeForLevel(level);
+    return mode ? GRAVITY_MODE_TIPS[mode] : null;
 }
+
+/** 暗牌贴图 resources 路径（相对 assets/resources/） */
+export const HIDDEN_TILE_RES = 'cube/暗牌';
+
+/** 当前是否在本关生成暗牌（暂仅第 8 关） */
+export function hasHiddenTilesForLevel(level: number): boolean {
+    return Math.max(1, Math.floor(level)) === 8;
+}
+
+/** 棋盘中央两块 2×2 区域，共 8 格暗牌位置（上下各偏移 2 格，中间留空） */
+export function getHiddenTileSpawnCells(): Array<{ r: number; c: number }> {
+    const cells: Array<{ r: number; c: number }> = [];
+    for (const r of [3, 4]) {
+        for (const c of [3, 4]) {
+            cells.push({ r, c });
+        }
+    }
+    for (const r of [9, 10]) {
+        for (const c of [3, 4]) {
+            cells.push({ r, c });
+        }
+    }
+    return cells;
+}
+
+const HIDDEN_FLIP_HALF = 0.16;
 
 const COLOR_SEL = new Color(0xe9, 0xc4, 0x6a, 255);
 const COLOR_HINT = new Color(0xe9, 0xc4, 0x6a, 255);
@@ -146,8 +188,15 @@ export class LinkUpBoard extends Component {
     onSelectSfx: (() => void) | null = null;
     /** 场上无可连对时由 GameView 弹提示并刷新；未注入则直接 shuffleAll */
     onNoConnectablePair: (() => void) | null = null;
+    /** 暗牌翻转完成时，由 GameView 注入以播放音效 */
+    onHiddenFlipSfx: (() => void) | null = null;
     /** 动态发牌全部落子完成后 */
     onDealComplete: (() => void) | null = null;
+
+    /** 暗牌背面贴图（GameApp 注入；未配置则运行时加载 cube/暗牌） */
+    private _hiddenTileSprite: SpriteFrame | null = null;
+    /** 各格是否为暗牌（未翻转） */
+    private _hidden: boolean[][] = [];
 
     private _dealing = false;
     private _dealOrder: Array<{ r: number; c: number }> = [];
@@ -255,6 +304,18 @@ export class LinkUpBoard extends Component {
         this._level = Math.max(1, Math.floor(level));
     }
 
+    /** 暗牌背面贴图；不配置则开局时从 resources/cube/暗牌 加载 */
+    setHiddenTileSprite(frame: SpriteFrame | null) {
+        this._hiddenTileSprite = frame;
+        if (this._cells.length === BOARD_ROWS && this._cells[0]?.length === BOARD_COLS) {
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    if (this._hidden[r]?.[c]) this._syncCellVisual(r, c);
+                }
+            }
+        }
+    }
+
     getLevel(): number {
         return this._level;
     }
@@ -263,7 +324,11 @@ export class LinkUpBoard extends Component {
         this._levelConnectCount = 0;
         this._clearBoard();
         this._ensureLayout();
-        this._fillRandomSolvable();
+        if (hasHiddenTilesForLevel(this._level)) {
+            this._ensureHiddenTileSpriteLoaded(() => this._fillRandomSolvable());
+        } else {
+            this._fillRandomSolvable();
+        }
     }
 
     getLevelConnectCount(): number {
@@ -286,13 +351,39 @@ export class LinkUpBoard extends Component {
         this._starBurstRoot = null;
         this.grid = [];
         this._cells = [];
+        this._hidden = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
             this.grid[r] = [];
             this._cells[r] = [];
+            this._hidden[r] = [];
             for (let c = 0; c < BOARD_COLS; c++) {
                 this.grid[r][c] = null;
                 this._cells[r][c] = null;
+                this._hidden[r][c] = false;
             }
+        }
+    }
+
+    private _isHidden(r: number, c: number): boolean {
+        return !!this._hidden[r]?.[c];
+    }
+
+    private _ensureHiddenTileSpriteLoaded(done: () => void) {
+        if (this._hiddenTileSprite) {
+            done();
+            return;
+        }
+        this._loadResourcesSpriteFrame(HIDDEN_TILE_RES).then((sf) => {
+            if (sf) this._hiddenTileSprite = sf;
+            done();
+        });
+    }
+
+    /** 本关发牌完成后，将中央 8 格标记为暗牌 */
+    private _applyHiddenSpawnMask() {
+        if (!hasHiddenTilesForLevel(this._level)) return;
+        for (const { r, c } of getHiddenTileSpawnCells()) {
+            if (this.grid[r][c] != null) this._hidden[r][c] = true;
         }
     }
 
@@ -724,10 +815,12 @@ export class LinkUpBoard extends Component {
                 }
             }
             if (this.findHintPair() != null) {
+                this._applyHiddenSpawnMask();
                 this._spawnCells(true);
                 return;
             }
         }
+        this._applyHiddenSpawnMask();
         this._spawnCells(true);
     }
 
@@ -953,12 +1046,45 @@ export class LinkUpBoard extends Component {
         }
 
         const btn = n.getComponent(Button);
-        if (btn) btn.interactable = true;
+        if (btn) btn.interactable = !this._isHidden(r, c);
         n.active = true;
 
         const ut = n.getComponent(UITransform);
         const tw = ut?.width ?? 0;
         const th = ut?.height ?? 0;
+
+        if (this._isHidden(r, c)) {
+            const darkSf = this._hiddenTileSprite;
+            if (darkSf && img) {
+                img.spriteFrame = darkSf;
+                img.enabled = true;
+                img.sizeMode = Sprite.SizeMode.CUSTOM;
+                img.color = Color.WHITE;
+                if (g) {
+                    g.clear();
+                    g.enabled = false;
+                }
+                if (lab) {
+                    lab.string = '';
+                    lab.enabled = false;
+                }
+            } else if (g) {
+                if (img) {
+                    img.spriteFrame = null;
+                    img.enabled = false;
+                }
+                g.enabled = true;
+                g.fillColor = new Color(0x2a, 0x2a, 0x35, 255);
+                this._paintCellFace(n, tw, th);
+                if (lab) {
+                    lab.enabled = true;
+                    lab.string = '?';
+                    lab.color = new Color(0x88, 0x88, 0x99, 255);
+                }
+            }
+            return;
+        }
+
         const sf = this._spriteFrameForType(v);
 
         if (sf && img) {
@@ -1002,7 +1128,7 @@ export class LinkUpBoard extends Component {
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
                 const n = this._cells[r][c];
-                if (!n || !n.active || this.grid[r][c] == null) continue;
+                if (!n || !n.active || this.grid[r][c] == null || this._isHidden(r, c)) continue;
                 const v = this.grid[r][c]!;
                 const lab = this._lab(n);
                 const img = this._cellImg(n);
@@ -1055,6 +1181,7 @@ export class LinkUpBoard extends Component {
     private _playShakeForType(typeId: number) {
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
+                if (this._isHidden(r, c)) continue;
                 if (this.grid[r][c] === typeId) this._playCellShake(r, c);
             }
         }
@@ -1063,7 +1190,7 @@ export class LinkUpBoard extends Component {
     private _onCellTap(r: number, c: number) {
         if (this._dealing) return;
         const v = this.grid[r][c];
-        if (v == null) return;
+        if (v == null || this._isHidden(r, c)) return;
 
         const now = Date.now();
         if (
@@ -1093,6 +1220,11 @@ export class LinkUpBoard extends Component {
         }
         const r0 = this._sel.r;
         const c0 = this._sel.c;
+        if (this._isHidden(r0, c0)) {
+            this._sel = null;
+            this._selectCell(r, c);
+            return;
+        }
         const v0 = this.grid[r0][c0];
         if (v0 !== v) {
             this._selectCell(r, c);
@@ -1104,10 +1236,15 @@ export class LinkUpBoard extends Component {
             this._drawConnectLine(r0, c0, r, c);
             this.grid[r0][c0] = null;
             this.grid[r][c] = null;
+            this._hidden[r0][c0] = false;
+            this._hidden[r][c] = false;
             this._sel = null;
             this._syncCellVisual(r0, c0);
             this._syncCellVisual(r, c);
-            this._afterChange();
+            this._afterRemoveCells([
+                { r: r0, c: c0 },
+                { r, c },
+            ]);
         } else {
             this._playCellShake(r0, c0);
             this._playCellShake(r, c);
@@ -1124,12 +1261,98 @@ export class LinkUpBoard extends Component {
         return true;
     }
 
-    private _gravityDirForLevel(): GravityDir | null {
-        return getGravityDirForLevel(this._level);
+    private _collectAdjacentHiddenToReveal(removed: Array<{ r: number; c: number }>): Array<{ r: number; c: number }> {
+        const out: Array<{ r: number; c: number }> = [];
+        const seen = new Set<string>();
+        const dirs: Array<[number, number]> = [
+            [-1, 0],
+            [1, 0],
+            [0, -1],
+            [0, 1],
+        ];
+        for (const { r, c } of removed) {
+            for (const [dr, dc] of dirs) {
+                const nr = r + dr;
+                const nc = c + dc;
+                if (nr < 0 || nr >= BOARD_ROWS || nc < 0 || nc >= BOARD_COLS) continue;
+                if (!this._isHidden(nr, nc) || this.grid[nr][nc] == null) continue;
+                const key = `${nr},${nc}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push({ r: nr, c: nc });
+            }
+        }
+        return out;
+    }
+
+    /** 暗牌沿水平中线翻转 180°，中途切换为本来方块图标 */
+    private _flipHiddenCell(r: number, c: number, onDone?: () => void) {
+        if (!this._isHidden(r, c)) {
+            onDone?.();
+            return;
+        }
+        this._hidden[r][c] = false;
+        const n = this._cells[r][c];
+        const face = n?.getChildByName('Face');
+        const imgN = face?.getChildByName('Img');
+        if (!imgN?.isValid) {
+            this._syncCellVisual(r, c);
+            onDone?.();
+            return;
+        }
+        this.onHiddenFlipSfx?.();
+        Tween.stopAllByTarget(imgN);
+        imgN.setScale(1, 1, 1);
+        const btn = n?.getComponent(Button);
+        if (btn) btn.interactable = true;
+        tween(imgN)
+            .to(HIDDEN_FLIP_HALF, { scale: new Vec3(1, 0, 1) }, { easing: easing.sineIn })
+            .call(() => this._syncCellVisual(r, c))
+            .to(HIDDEN_FLIP_HALF, { scale: new Vec3(1, 1, 1) }, { easing: easing.sineOut })
+            .call(() => onDone?.())
+            .start();
+    }
+
+    private _afterRemoveCells(removed: Array<{ r: number; c: number }>) {
+        const flips = this._collectAdjacentHiddenToReveal(removed);
+        if (flips.length === 0) {
+            this._afterChange();
+            return;
+        }
+        let pending = flips.length;
+        const finishOne = () => {
+            pending--;
+            if (pending <= 0) this._afterChange();
+        };
+        for (const { r, c } of flips) {
+            this._flipHiddenCell(r, c, finishOne);
+        }
+    }
+
+    private _syncHiddenAfterGravity(moves: GravityMove[]) {
+        if (moves.length === 0) return;
+        const prev = this._hidden.map((row) => [...row]);
+        const next: boolean[][] = [];
+        for (let r = 0; r < BOARD_ROWS; r++) {
+            next[r] = [];
+            for (let c = 0; c < BOARD_COLS; c++) next[r][c] = false;
+        }
+        for (let r = 0; r < BOARD_ROWS; r++) {
+            for (let c = 0; c < BOARD_COLS; c++) {
+                if (this.grid[r][c] == null) continue;
+                const m = moves.find((x) => x.toR === r && x.toC === c);
+                next[r][c] = m ? prev[m.fromR][m.fromC] : prev[r][c];
+            }
+        }
+        this._hidden = next;
+    }
+
+    private _gravityModeForLevel(): GravityMode | null {
+        return getGravityModeForLevel(this._level);
     }
 
     private _computeGravity(
-        dir: GravityDir,
+        mode: GravityMode,
     ): { grid: (number | null)[][]; moves: GravityMove[] } {
         const next: (number | null)[][] = [];
         const moves: GravityMove[] = [];
@@ -1138,7 +1361,67 @@ export class LinkUpBoard extends Component {
             for (let c = 0; c < BOARD_COLS; c++) next[r][c] = null;
         }
 
-        if (dir === 'left' || dir === 'right') {
+        if (mode === 'split-v') {
+            const mid = Math.floor(BOARD_ROWS / 2);
+            for (let c = 0; c < BOARD_COLS; c++) {
+                const topItems: Array<{ r: number; v: number }> = [];
+                for (let r = 0; r < mid; r++) {
+                    const v = this.grid[r][c];
+                    if (v != null) topItems.push({ r, v });
+                }
+                for (let i = 0; i < topItems.length; i++) {
+                    const newR = i;
+                    const oldR = topItems[i].r;
+                    next[newR][c] = topItems[i].v;
+                    if (oldR !== newR) {
+                        moves.push({ fromR: oldR, fromC: c, toR: newR, toC: c });
+                    }
+                }
+                const bottomItems: Array<{ r: number; v: number }> = [];
+                for (let r = mid; r < BOARD_ROWS; r++) {
+                    const v = this.grid[r][c];
+                    if (v != null) bottomItems.push({ r, v });
+                }
+                for (let i = 0; i < bottomItems.length; i++) {
+                    const newR = BOARD_ROWS - bottomItems.length + i;
+                    const oldR = bottomItems[i].r;
+                    next[newR][c] = bottomItems[i].v;
+                    if (oldR !== newR) {
+                        moves.push({ fromR: oldR, fromC: c, toR: newR, toC: c });
+                    }
+                }
+            }
+        } else if (mode === 'split-h') {
+            const mid = Math.floor(BOARD_COLS / 2);
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                const leftItems: Array<{ c: number; v: number }> = [];
+                for (let c = 0; c < mid; c++) {
+                    const v = this.grid[r][c];
+                    if (v != null) leftItems.push({ c, v });
+                }
+                for (let i = 0; i < leftItems.length; i++) {
+                    const newC = i;
+                    const oldC = leftItems[i].c;
+                    next[r][newC] = leftItems[i].v;
+                    if (oldC !== newC) {
+                        moves.push({ fromR: r, fromC: oldC, toR: r, toC: newC });
+                    }
+                }
+                const rightItems: Array<{ c: number; v: number }> = [];
+                for (let c = mid; c < BOARD_COLS; c++) {
+                    const v = this.grid[r][c];
+                    if (v != null) rightItems.push({ c, v });
+                }
+                for (let i = 0; i < rightItems.length; i++) {
+                    const newC = BOARD_COLS - rightItems.length + i;
+                    const oldC = rightItems[i].c;
+                    next[r][newC] = rightItems[i].v;
+                    if (oldC !== newC) {
+                        moves.push({ fromR: r, fromC: oldC, toR: r, toC: newC });
+                    }
+                }
+            }
+        } else if (mode === 'left' || mode === 'right') {
             for (let r = 0; r < BOARD_ROWS; r++) {
                 const items: Array<{ c: number; v: number }> = [];
                 for (let c = 0; c < BOARD_COLS; c++) {
@@ -1146,7 +1429,7 @@ export class LinkUpBoard extends Component {
                     if (v != null) items.push({ c, v });
                 }
                 for (let i = 0; i < items.length; i++) {
-                    const newC = dir === 'left' ? i : BOARD_COLS - items.length + i;
+                    const newC = mode === 'left' ? i : BOARD_COLS - items.length + i;
                     const oldC = items[i].c;
                     next[r][newC] = items[i].v;
                     if (oldC !== newC) {
@@ -1162,7 +1445,7 @@ export class LinkUpBoard extends Component {
                     if (v != null) items.push({ r, v });
                 }
                 for (let i = 0; i < items.length; i++) {
-                    const newR = dir === 'up' ? i : BOARD_ROWS - items.length + i;
+                    const newR = mode === 'up' ? i : BOARD_ROWS - items.length + i;
                     const oldR = items[i].r;
                     next[newR][c] = items[i].v;
                     if (oldR !== newR) {
@@ -1175,17 +1458,18 @@ export class LinkUpBoard extends Component {
     }
 
     private _applyGravityWithAnimation(onDone: () => void): boolean {
-        const dir = this._gravityDirForLevel();
-        if (!dir) {
+        const mode = this._gravityModeForLevel();
+        if (!mode) {
             onDone();
             return false;
         }
-        const { grid: next, moves } = this._computeGravity(dir);
+        const { grid: next, moves } = this._computeGravity(mode);
         if (moves.length === 0) {
             onDone();
             return false;
         }
         this.grid = next;
+        this._syncHiddenAfterGravity(moves);
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
                 this._syncCellVisual(r, c);
@@ -1250,12 +1534,12 @@ export class LinkUpBoard extends Component {
         for (let r1 = 0; r1 < BOARD_ROWS; r1++) {
             for (let c1 = 0; c1 < BOARD_COLS; c1++) {
                 const a = this.grid[r1][c1];
-                if (a == null) continue;
+                if (a == null || this._isHidden(r1, c1)) continue;
                 for (let r2 = 0; r2 < BOARD_ROWS; r2++) {
                     for (let c2 = 0; c2 < BOARD_COLS; c2++) {
                         if (r1 === r2 && c1 === c2) continue;
                         const b = this.grid[r2][c2];
-                        if (b !== a) continue;
+                        if (b !== a || this._isHidden(r2, c2)) continue;
                         if (LinkUpPathFinder.canConnect(this.grid, r1, c1, r2, c2)) {
                             return { r1, c1, r2, c2 };
                         }
@@ -1306,11 +1590,11 @@ export class LinkUpBoard extends Component {
 
     shuffleAll(ensurePair: boolean) {
         if (this._dealing || !this._layoutReady()) return;
-        const bag: number[] = [];
+        const bag: Array<{ v: number; hidden: boolean }> = [];
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
                 const v = this.grid[r][c];
-                if (v != null) bag.push(v);
+                if (v != null) bag.push({ v, hidden: this._isHidden(r, c) });
             }
         }
         if (bag.length === 0) return;
@@ -1322,7 +1606,9 @@ export class LinkUpBoard extends Component {
             for (let r = 0; r < BOARD_ROWS; r++) {
                 for (let c = 0; c < BOARD_COLS; c++) {
                     if (this.grid[r][c] != null) {
-                        this.grid[r][c] = bag[i++];
+                        this.grid[r][c] = bag[i].v;
+                        this._hidden[r][c] = bag[i].hidden;
+                        i++;
                     }
                 }
             }
@@ -1346,7 +1632,7 @@ export class LinkUpBoard extends Component {
         for (let r = 0; r < BOARD_ROWS; r++) {
             for (let c = 0; c < BOARD_COLS; c++) {
                 const v = this.grid[r][c];
-                if (v == null) continue;
+                if (v == null || this._isHidden(r, c)) continue;
                 occ.push({ r, c });
                 const list = byType.get(v) ?? [];
                 if (list.length === 0) byType.set(v, list);
@@ -1379,18 +1665,24 @@ export class LinkUpBoard extends Component {
         } else {
             this.onConnectSfx?.();
             this.grid[occ[0].r][occ[0].c] = null;
+            this._hidden[occ[0].r][occ[0].c] = false;
             this._syncCellVisual(occ[0].r, occ[0].c);
-            this._afterChange();
+            this._afterRemoveCells([{ r: occ[0].r, c: occ[0].c }]);
             return;
         }
 
         this.onConnectSfx?.();
         this.grid[a.r][a.c] = null;
         this.grid[b.r][b.c] = null;
+        this._hidden[a.r][a.c] = false;
+        this._hidden[b.r][b.c] = false;
         this._syncCellVisual(a.r, a.c);
         this._syncCellVisual(b.r, b.c);
         this._sel = null;
-        this._afterChange();
+        this._afterRemoveCells([
+            { r: a.r, c: a.c },
+            { r: b.r, c: b.c },
+        ]);
     }
 
     resizeToParent() {

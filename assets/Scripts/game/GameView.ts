@@ -55,6 +55,7 @@ export type GameSfxConfig = {
     hint: AudioClip | null;
     refresh: AudioClip | null;
     eliminate: AudioClip | null;
+    hiddenFlip: AudioClip | null;
 };
 
 const C_BTN = new Color(0x41, 0x5a, 0x77, 255);
@@ -159,6 +160,8 @@ export class GameView extends Component {
     private _shopPropsEnabled = false;
     /** GameApp 测试模式：道具不扣次数 */
     private _testMode = false;
+    /** GameApp 注入的暗牌贴图缓存（_buildUi 完成前可能已注入） */
+    private _hiddenTileSpriteCache: SpriteFrame | null = null;
 
     onBack: (() => void) | null = null;
     /** 关卡通关：参数为本关连线次数（由 GameApp 结算并弹窗） */
@@ -202,10 +205,8 @@ export class GameView extends Component {
 
     private _runBuildLevel(board: LinkUpBoard) {
         const level = this._level;
-        const prevOnDeal = board.onDealComplete;
         board.onDealComplete = () => {
             board.resizeToParent();
-            prevOnDeal?.();
             this._showLevelEnterTip(level);
         };
         board.setLevel(level);
@@ -289,11 +290,20 @@ export class GameView extends Component {
         this.scheduleOnce(() => this.relayout(), 0);
     }
 
-    /** 连线成功 / 底栏工具音效，由 GameApp 注入 */
+    /** 连线成功 / 底栏工具 / 暗牌翻转音效，由 GameApp 注入 */
     setGameSfx(sfx: GameSfxConfig | null) {
         this._sfx =
-            sfx && (sfx.connect || sfx.select || sfx.hint || sfx.refresh || sfx.eliminate) ? { ...sfx } : null;
+            sfx &&
+            (sfx.connect || sfx.select || sfx.hint || sfx.refresh || sfx.eliminate || sfx.hiddenFlip)
+                ? { ...sfx }
+                : null;
         this._wireBoardCallbacks();
+    }
+
+    /** 暗牌背面贴图，由 GameApp 注入；未配置则棋盘从 resources/cube/暗牌 加载 */
+    setHiddenTileSprite(frame: SpriteFrame | null) {
+        this._hiddenTileSpriteCache = frame;
+        this._board?.setHiddenTileSprite(frame);
     }
 
     /** 无可连对提示文案与自动刷新延迟，由 GameApp 注入；传 null 则恢复为仅洗牌、不弹窗 */
@@ -479,6 +489,7 @@ export class GameView extends Component {
         if (this._tileFaceCache && this._tileFaceCache.length > 0) {
             this._board.setTileFaceSprites(this._tileFaceCache);
         }
+        this._board.setHiddenTileSprite(this._hiddenTileSpriteCache);
         this._applyDeckToBoard();
         this._wireBoardCallbacks();
 
@@ -608,8 +619,9 @@ export class GameView extends Component {
     }
 
     private _showLevelEnterTip(level: number) {
-        if (level < 2) return;
         const rule = getLevelEnterTip(level);
+        const prev = this.node.getChildByName('LevelEnterToast');
+        if (prev?.isValid) prev.destroy();
         if (!rule) return;
         this._showGameToast(rule, 3.2, 'LevelEnterToast');
     }
@@ -632,6 +644,9 @@ export class GameView extends Component {
         };
         this._board.onSelectSfx = () => {
             this._playSfx(this._sfx?.select, 0.7);
+        };
+        this._board.onHiddenFlipSfx = () => {
+            this._playSfx(this._sfx?.hiddenFlip);
         };
         this._board.onNoConnectablePair = this._noConnectCfg
             ? () => {

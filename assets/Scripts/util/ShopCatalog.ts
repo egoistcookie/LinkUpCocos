@@ -39,7 +39,7 @@ export type ShopCatalogResult = {
 };
 
 export const SHOP_SLOTS_PER_GROUP = 6;
-export const SHOP_COLS_PER_ROW = 6;
+export const SHOP_COLS_PER_ROW = 5;
 
 const GROUP_DEFS: { title: string; key: ShopSpriteGroupKey }[] = [
     { title: '陆地动物方块', key: 'landAnimals' },
