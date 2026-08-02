@@ -1,0 +1,134 @@
+{
+  "ver": "1.0.27",
+  "importer": "image",
+  "imported": true,
+  "uuid": "a5168ade-7e9d-4cdc-ab5c-f7b80a9d383a",
+  "files": [
+    ".json",
+    ".png"
+  ],
+  "subMetas": {
+    "6c48a": {
+      "importer": "texture",
+      "uuid": "a5168ade-7e9d-4cdc-ab5c-f7b80a9d383a@6c48a",
+      "displayName": "16种甜点_13_meitu",
+      "id": "6c48a",
+      "name": "texture",
+      "userData": {
+        "wrapModeS": "clamp-to-edge",
+        "wrapModeT": "clamp-to-edge",
+        "imageUuidOrDatabaseUri": "a5168ade-7e9d-4cdc-ab5c-f7b80a9d383a",
+        "isUuid": true,
+        "visible": false,
+        "minfilter": "linear",
+        "magfilter": "linear",
+        "mipfilter": "none",
+        "anisotropy": 0
+      },
+      "ver": "1.0.22",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "f9941": {
+      "importer": "sprite-frame",
+      "uuid": "a5168ade-7e9d-4cdc-ab5c-f7b80a9d383a@f9941",
+      "displayName": "16种甜点_13_meitu",
+      "id": "f9941",
+      "name": "spriteFrame",
+      "userData": {
+        "trimThreshold": 1,
+        "rotated": false,
+        "offsetX": 3,
+        "offsetY": 1.5,
+        "trimX": 9,
+        "trimY": 2,
+        "width": 88,
+        "height": 94,
+        "rawWidth": 100,
+        "rawHeight": 101,
+        "borderTop": 0,
+        "borderBottom": 0,
+        "borderLeft": 0,
+        "borderRight": 0,
+        "packable": true,
+        "pixelsToUnit": 100,
+        "pivotX": 0.5,
+        "pivotY": 0.5,
+        "meshType": 0,
+        "vertices": {
+          "rawPosition": [
+            -44,
+            -47,
+            0,
+            44,
+            -47,
+            0,
+            -44,
+            47,
+            0,
+            44,
+            47,
+            0
+          ],
+          "indexes": [
+            0,
+            1,
+            2,
+            2,
+            1,
+            3
+          ],
+          "uv": [
+            9,
+            99,
+            97,
+            99,
+            9,
+            5,
+            97,
+            5
+          ],
+          "nuv": [
+            0.09,
+            0.04950495049504951,
+            0.97,
+            0.04950495049504951,
+            0.09,
+            0.9801980198019802,
+            0.97,
+            0.9801980198019802
+          ],
+          "minPos": [
+            -44,
+            -47,
+            0
+          ],
+          "maxPos": [
+            44,
+            47,
+            0
+          ]
+        },
+        "isUuid": true,
+        "imageUuidOrDatabaseUri": "a5168ade-7e9d-4cdc-ab5c-f7b80a9d383a@6c48a",
+        "atlasUuid": "",
+        "trimType": "auto"
+      },
+      "ver": "1.0.12",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    }
+  },
+  "userData": {
+    "type": "sprite-frame",
+    "fixAlphaTransparencyArtifacts": false,
+    "hasAlpha": true,
+    "redirect": "a5168ade-7e9d-4cdc-ab5c-f7b80a9d383a@6c48a"
+  }
+}

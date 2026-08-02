@@ -219,9 +219,18 @@ export class DeckSelectDialog extends Component {
         }
 
         if (shopOn) {
-            const initialKeys = loadDeckShopKeysRaw(shopGroups);
-            for (const k of initialKeys) {
-                if (deckEntries.some((e) => e.shopKey === k)) this._selectedShopKeys.add(k);
+            const entryKeys = deckEntries.map((e) => String(e.shopKey));
+            const initialKeys = loadDeckShopKeysRaw(shopGroups, entryKeys);
+            for (let i = 0; i < initialKeys.length; i++) {
+                const k = String(initialKeys[i]);
+                if (entryKeys.indexOf(k) >= 0) this._selectedShopKeys.add(k);
+            }
+            // 默认选中前 30 种（列表顺序 = 赠送顺序）
+            if (this._selectedShopKeys.size < MIN_DECK_TYPE_COUNT) {
+                for (let i = 0; i < entryKeys.length && this._selectedShopKeys.size < MIN_DECK_TYPE_COUNT; i++) {
+                    this._selectedShopKeys.add(entryKeys[i]);
+                }
+                saveDeckShopKeys([...this._selectedShopKeys]);
             }
         } else {
             const available = getConfiguredTypeIds(faces);
@@ -229,6 +238,12 @@ export class DeckSelectDialog extends Component {
             const allow = new Set(available);
             for (const id of initial) {
                 if (allow.has(id)) this._selectedIds.add(id);
+            }
+            if (this._selectedIds.size < MIN_DECK_TYPE_COUNT) {
+                for (let i = 0; i < available.length && this._selectedIds.size < MIN_DECK_TYPE_COUNT; i++) {
+                    this._selectedIds.add(available[i]);
+                }
+                saveDeckTypeIds([...this._selectedIds]);
             }
         }
 

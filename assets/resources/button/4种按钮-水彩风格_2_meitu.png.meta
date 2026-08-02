@@ -1,0 +1,134 @@
+{
+  "ver": "1.0.27",
+  "importer": "image",
+  "imported": true,
+  "uuid": "10031cb5-7fe1-46e8-940b-fc9292ff137f",
+  "files": [
+    ".json",
+    ".png"
+  ],
+  "subMetas": {
+    "6c48a": {
+      "importer": "texture",
+      "uuid": "10031cb5-7fe1-46e8-940b-fc9292ff137f@6c48a",
+      "displayName": "4种按钮-水彩风格_2_meitu",
+      "id": "6c48a",
+      "name": "texture",
+      "userData": {
+        "wrapModeS": "clamp-to-edge",
+        "wrapModeT": "clamp-to-edge",
+        "minfilter": "linear",
+        "magfilter": "linear",
+        "mipfilter": "none",
+        "anisotropy": 0,
+        "isUuid": true,
+        "imageUuidOrDatabaseUri": "10031cb5-7fe1-46e8-940b-fc9292ff137f",
+        "visible": false
+      },
+      "ver": "1.0.22",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "f9941": {
+      "importer": "sprite-frame",
+      "uuid": "10031cb5-7fe1-46e8-940b-fc9292ff137f@f9941",
+      "displayName": "4种按钮-水彩风格_2_meitu",
+      "id": "f9941",
+      "name": "spriteFrame",
+      "userData": {
+        "trimThreshold": 1,
+        "rotated": false,
+        "offsetX": 0,
+        "offsetY": -1,
+        "trimX": 8,
+        "trimY": 5,
+        "width": 184,
+        "height": 118,
+        "rawWidth": 200,
+        "rawHeight": 126,
+        "borderTop": 0,
+        "borderBottom": 0,
+        "borderLeft": 0,
+        "borderRight": 0,
+        "packable": true,
+        "pixelsToUnit": 100,
+        "pivotX": 0.5,
+        "pivotY": 0.5,
+        "meshType": 0,
+        "vertices": {
+          "rawPosition": [
+            -92,
+            -59,
+            0,
+            92,
+            -59,
+            0,
+            -92,
+            59,
+            0,
+            92,
+            59,
+            0
+          ],
+          "indexes": [
+            0,
+            1,
+            2,
+            2,
+            1,
+            3
+          ],
+          "uv": [
+            8,
+            121,
+            192,
+            121,
+            8,
+            3,
+            192,
+            3
+          ],
+          "nuv": [
+            0.04,
+            0.023809523809523808,
+            0.96,
+            0.023809523809523808,
+            0.04,
+            0.9603174603174603,
+            0.96,
+            0.9603174603174603
+          ],
+          "minPos": [
+            -92,
+            -59,
+            0
+          ],
+          "maxPos": [
+            92,
+            59,
+            0
+          ]
+        },
+        "isUuid": true,
+        "imageUuidOrDatabaseUri": "10031cb5-7fe1-46e8-940b-fc9292ff137f@6c48a",
+        "atlasUuid": "",
+        "trimType": "auto"
+      },
+      "ver": "1.0.12",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    }
+  },
+  "userData": {
+    "type": "sprite-frame",
+    "fixAlphaTransparencyArtifacts": false,
+    "hasAlpha": true,
+    "redirect": "10031cb5-7fe1-46e8-940b-fc9292ff137f@6c48a"
+  }
+}

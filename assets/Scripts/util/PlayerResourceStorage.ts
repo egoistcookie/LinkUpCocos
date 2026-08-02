@@ -4,7 +4,9 @@ const COINS_KEY = 'linkup_v1_coins';
 const CURRENT_LEVEL_KEY = 'linkup_v1_current_level';
 const PURCHASED_SHOP_KEYS = 'linkup_v1_purchased_shop_keys';
 const PROPS_KEY = 'linkup_v1_props';
-const SHOP_DEFAULTS_KEY = 'linkup_v1_shop_defaults_applied';
+/** 赠送方案版本；变更后会再次合并补全默认方块 */
+const SHOP_DEFAULTS_KEY = 'linkup_v1_shop_defaults_ver';
+const SHOP_DEFAULTS_VER = 'gift35-v1';
 
 export type PurchaseResult = 'success' | 'already_owned' | 'insufficient_coins' | 'invalid';
 
@@ -15,10 +17,19 @@ export type PropKind = 'hint' | 'refresh' | 'eliminate';
 
 type PropCounts = Record<PropKind, number>;
 
+/**
+ * 用 globalThis 存缓存，避免微信分包/多份打包模块各自一份 let 缓存，
+ * 出现「刚赠送写入 A 实例、读取却打到 B 实例空缓存」.
+ */
+type PurchasedCacheHost = { __linkupPurchasedShopKeys?: string[] | null };
+const _cacheHost = globalThis as unknown as PurchasedCacheHost;
+
 function readJson<T>(key: string, fallback: T): T {
     try {
-        const s = sys.localStorage.getItem(key);
-        if (!s) return fallback;
+        const s = sys.localStorage.getItem(key) as unknown;
+        if (s == null || s === '') return fallback;
+        // 微信小游戏 storage 有时直接返回对象，而非 JSON 字符串
+        if (typeof s !== 'string') return s as T;
         return JSON.parse(s) as T;
     } catch {
         return fallback;
@@ -31,6 +42,25 @@ function writeJson(key: string, value: unknown): void {
     } catch {
         /* 忽略 */
     }
+}
+
+function normalizePurchasedKeys(raw: unknown): string[] {
+    let arr: unknown[] = [];
+    if (Array.isArray(raw)) {
+        arr = raw;
+    } else if (raw && typeof raw === 'object') {
+        // 微信端偶发把数组存成 {0:..,1:..}
+        arr = Object.values(raw as Record<string, unknown>);
+    } else {
+        return [];
+    }
+    return [...new Set(arr.map((x) => String(x)).filter((s) => s.includes(':')))].sort();
+}
+
+function savePurchasedShopKeys(keys: string[]): void {
+    const normalized = normalizePurchasedKeys(keys);
+    _cacheHost.__linkupPurchasedShopKeys = normalized;
+    writeJson(PURCHASED_SHOP_KEYS, normalized);
 }
 
 export function loadCurrentLevel(): number {
@@ -64,47 +94,82 @@ export function spendCoins(amount: number): number | null {
 }
 
 export function loadPurchasedShopKeys(): string[] {
-    const raw = readJson<unknown>(PURCHASED_SHOP_KEYS, []);
-    if (!Array.isArray(raw)) return [];
-    return [...new Set(raw.map((x) => String(x)).filter((s) => s.includes(':')))].sort();
+    // 注意：空数组 [] 也是有效缓存，不能用 if (cached)（空数组为 truthy，但要用 != null 区分未加载）
+    if (_cacheHost.__linkupPurchasedShopKeys != null) {
+        return _cacheHost.__linkupPurchasedShopKeys.slice();
+    }
+    const loaded = normalizePurchasedKeys(readJson<unknown>(PURCHASED_SHOP_KEYS, []));
+    _cacheHost.__linkupPurchasedShopKeys = loaded;
+    return loaded.slice();
 }
 
 export function isShopBlockOwned(shopKey: string): boolean {
-    return loadPurchasedShopKeys().includes(shopKey);
+    const k = String(shopKey ?? '');
+    return loadPurchasedShopKeys().indexOf(k) >= 0;
 }
 
 export function purchaseShopBlock(shopKey: string): PurchaseResult {
-    if (!shopKey || !shopKey.includes(':')) return 'invalid';
+    const k = String(shopKey ?? '');
+    if (!k.includes(':')) return 'invalid';
     const set = new Set(loadPurchasedShopKeys());
-    if (set.has(shopKey)) return 'already_owned';
+    if (set.has(k)) return 'already_owned';
     const after = spendCoins(BLOCK_PRICE);
     if (after == null) return 'insufficient_coins';
-    set.add(shopKey);
-    writeJson(PURCHASED_SHOP_KEYS, [...set].sort());
+    set.add(k);
+    savePurchasedShopKeys([...set]);
     return 'success';
 }
 
-/** 首次启用商店：默认拥有各分组前 6 种；已购列表会合并补全 */
-export function ensureDefaultShopOwnership(defaultKeys: string[]): void {
-    if (defaultKeys.length === 0) return;
+/** 把未知结构规范成 shopKey 字符串列表（兼容微信端伪数组） */
+function coerceShopKeyList(defaultKeys: unknown): string[] {
+    const out: string[] = [];
+    const seen: Record<string, number> = Object.create(null);
+    if (defaultKeys == null) return out;
+    const pushOne = (raw: unknown) => {
+        const k = String(raw ?? '');
+        // 只接受 groupKey:数字，避免 UUID/异常值污染
+        if (!/^[A-Za-z][A-Za-z0-9]*:\d+$/.test(k)) return;
+        if (seen[k]) return;
+        seen[k] = 1;
+        out.push(k);
+    };
+    if (Array.isArray(defaultKeys)) {
+        for (let i = 0; i < defaultKeys.length; i++) pushOne(defaultKeys[i]);
+        return out;
+    }
+    if (typeof defaultKeys === 'object') {
+        const any = defaultKeys as { length?: unknown };
+        const n = Number(any.length);
+        if (Number.isFinite(n) && n >= 0 && n < 10000) {
+            for (let i = 0; i < n; i++) pushOne((defaultKeys as Record<number, unknown>)[i]);
+            if (out.length > 0) return out;
+        }
+        const vals = Object.keys(defaultKeys as Record<string, unknown>);
+        for (let i = 0; i < vals.length; i++) {
+            pushOne((defaultKeys as Record<string, unknown>)[vals[i]]);
+        }
+    }
+    return out;
+}
+
+/**
+ * 启用商店时赠送默认方块；已购列表会合并补全。
+ * @returns 合并后的已拥有 shopKey 列表（勿仅依赖 storage，微信端可能写失败）
+ */
+export function ensureDefaultShopOwnership(defaultKeys: unknown): string[] {
+    const list = coerceShopKeyList(defaultKeys);
     const existing = new Set(loadPurchasedShopKeys());
-    let changed = false;
-    for (const k of defaultKeys) {
-        if (!existing.has(k)) {
-            existing.add(k);
-            changed = true;
+    for (let i = 0; i < list.length; i++) existing.add(list[i]);
+    const merged = [...existing].sort();
+    if (list.length > 0 || merged.length > 0) {
+        savePurchasedShopKeys(merged);
+        try {
+            sys.localStorage.setItem(SHOP_DEFAULTS_KEY, SHOP_DEFAULTS_VER);
+        } catch {
+            /* 忽略 */
         }
     }
-    if (changed) {
-        writeJson(PURCHASED_SHOP_KEYS, [...existing].sort());
-    }
-    try {
-        if (sys.localStorage.getItem(SHOP_DEFAULTS_KEY) !== '1') {
-            sys.localStorage.setItem(SHOP_DEFAULTS_KEY, '1');
-        }
-    } catch {
-        /* 忽略 */
-    }
+    return merged.length > 0 ? merged : list.slice();
 }
 
 function defaultPropCounts(): PropCounts {

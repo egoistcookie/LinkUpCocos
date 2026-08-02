@@ -1,15 +1,19 @@
 import { SpriteFrame, sys } from 'cc';
+import { MAX_DECK_TYPE_COUNT, MIN_DECK_TYPE_COUNT, TILE_SPRITE_SLOTS } from './DeckConstants';
 import { loadPurchasedShopKeys } from './PlayerResourceStorage';
 import type { ShopCatalogGroup } from './ShopCatalog';
-import { buildTileFacesFromDeckKeys, deckShopKeysToTypeIds } from './ShopCatalog';
+import {
+    buildTileFacesFromDeckKeys,
+    deckShopKeysToTypeIds,
+    getDefaultOwnedEntries,
+    getDefaultOwnedShopKeys,
+} from './ShopCatalog';
+import { ensureDefaultShopOwnership } from './PlayerResourceStorage';
 
-const TILE_SPRITE_SLOTS = 40;
+export { MAX_DECK_TYPE_COUNT, MIN_DECK_TYPE_COUNT };
 
 const STORAGE_KEY = 'linkup_v1_deck_type_ids';
 const DECK_SHOP_KEYS = 'linkup_v1_deck_shop_keys';
-
-export const MIN_DECK_TYPE_COUNT = 30;
-export const MAX_DECK_TYPE_COUNT = 40;
 
 export type DeckEntry = { shopKey: string; sprite: SpriteFrame };
 
@@ -22,43 +26,148 @@ export function getConfiguredTypeIds(tileFaces: Array<SpriteFrame | null> | null
     return out;
 }
 
-export function getPurchasedDeckEntries(groups: ShopCatalogGroup[]): DeckEntry[] {
-    const owned = new Set(loadPurchasedShopKeys());
+export function getPurchasedDeckEntries(
+    groups: ShopCatalogGroup[],
+    /** 额外视为已拥有的 key（如刚赠送的列表，不依赖 storage 是否写成功） */
+    extraOwnedKeys?: string[] | null,
+): DeckEntry[] {
+    const owned = new Set(loadPurchasedShopKeys().map((k) => String(k)));
+    if (extraOwnedKeys) {
+        const extra = extraOwnedKeys as unknown as { length?: number };
+        const n = Array.isArray(extraOwnedKeys)
+            ? extraOwnedKeys.length
+            : Number(extra?.length) || 0;
+        for (let i = 0; i < n; i++) {
+            const k = String((extraOwnedKeys as string[])[i] ?? '');
+            if (k.includes(':')) owned.add(k);
+        }
+    }
     const out: DeckEntry[] = [];
     for (const g of groups) {
         for (const it of g.items) {
-            if (owned.has(it.shopKey)) out.push({ shopKey: it.shopKey, sprite: it.sprite });
+            const key = String(it.shopKey ?? '');
+            if (owned.has(key)) out.push({ shopKey: key, sprite: it.sprite });
         }
     }
     return out;
 }
 
-export function loadDeckShopKeysRaw(groups: ShopCatalogGroup[]): string[] {
-    const allowed = new Set(getPurchasedDeckEntries(groups).map((e) => e.shopKey));
-    let raw: unknown = null;
-    try {
-        const s = sys.localStorage.getItem(DECK_SHOP_KEYS);
-        if (s) raw = JSON.parse(s);
-    } catch {
-        raw = null;
+/**
+ * 赠送 + 已购买 合并后的卡组可选列表。
+ * 赠送条目直接拷贝进数组（不用 Map），避免微信端 key 异常时 35 条被合并成 1 条。
+ */
+export function collectDeckEntriesForUi(groups: ShopCatalogGroup[]): DeckEntry[] {
+    const giftEntries = getDefaultOwnedEntries(groups);
+    const giftKeys: string[] = [];
+    const out: DeckEntry[] = [];
+    const seen: Record<string, number> = Object.create(null);
+    for (let i = 0; i < giftEntries.length; i++) {
+        const e = giftEntries[i];
+        const k = String(e.shopKey);
+        giftKeys.push(k);
+        if (seen[k]) continue;
+        seen[k] = 1;
+        out.push({ shopKey: k, sprite: e.sprite });
+    }
+    ensureDefaultShopOwnership(giftKeys);
+
+    // 已购买但不在赠送列表中的，按目录补上
+    const purchased = getPurchasedDeckEntries(groups, giftKeys);
+    for (let i = 0; i < purchased.length; i++) {
+        const e = purchased[i];
+        const k = String(e.shopKey);
+        if (seen[k]) continue;
+        seen[k] = 1;
+        out.push({ shopKey: k, sprite: e.sprite });
+    }
+    return out;
+}
+
+/**
+ * 尚未配置卡组（或不足最少种类）时：默认选中前 {@link MIN_DECK_TYPE_COUNT} 种。
+ * @param preferredKeys 优先顺序（一般为卡组 UI 列表顺序 / 赠送顺序）
+ */
+export function ensureDefaultDeckSelection(
+    groups: ShopCatalogGroup[],
+    preferredKeys?: string[] | null,
+): void {
+    const prefer =
+        preferredKeys && preferredKeys.length > 0
+            ? preferredKeys.map((k) => String(k))
+            : getDefaultOwnedShopKeys(groups);
+    if (prefer.length < MIN_DECK_TYPE_COUNT) return;
+    const current = loadDeckShopKeysRaw(groups, prefer);
+    if (current.length >= MIN_DECK_TYPE_COUNT) return;
+    // 默认只勾选前 30 种（最少开局种类）
+    saveDeckShopKeys(prefer.slice(0, MIN_DECK_TYPE_COUNT));
+}
+
+type DeckKeysCacheHost = { __linkupDeckShopKeys?: string[] | null };
+const _deckKeysHost = globalThis as unknown as DeckKeysCacheHost;
+
+export function loadDeckShopKeysRaw(
+    groups: ShopCatalogGroup[],
+    extraOwnedKeys?: string[] | null,
+): string[] {
+    // 允许：已购 + 传入额外 + 默认赠送（避免开始游戏时把默认卡组 key 滤空）
+    const allowed: Record<string, number> = Object.create(null);
+    const mark = (k: string) => {
+        if (k) allowed[k] = 1;
+    };
+    const purchased = getPurchasedDeckEntries(groups, extraOwnedKeys);
+    for (let i = 0; i < purchased.length; i++) mark(String(purchased[i].shopKey));
+    if (extraOwnedKeys) {
+        for (let i = 0; i < extraOwnedKeys.length; i++) mark(String(extraOwnedKeys[i] ?? ''));
+    }
+    const gifts = getDefaultOwnedShopKeys(groups);
+    for (let i = 0; i < gifts.length; i++) mark(String(gifts[i]));
+
+    let raw: unknown = _deckKeysHost.__linkupDeckShopKeys;
+    if (raw == null) {
+        try {
+            const s = sys.localStorage.getItem(DECK_SHOP_KEYS) as unknown;
+            if (s == null || s === '') raw = null;
+            else if (typeof s !== 'string') raw = s;
+            else raw = JSON.parse(s);
+        } catch {
+            raw = null;
+        }
     }
     if (Array.isArray(raw)) {
-        return [...new Set(raw.map((x) => String(x)).filter((k) => allowed.has(k)))];
+        const keys: string[] = [];
+        const seen: Record<string, number> = Object.create(null);
+        for (let i = 0; i < raw.length; i++) {
+            const k = String(raw[i] ?? '');
+            if (!k || !allowed[k] || seen[k]) continue;
+            seen[k] = 1;
+            keys.push(k);
+        }
+        // 仅在过滤后仍有效时回写缓存，避免用空列表冲掉默认 30 种
+        if (keys.length > 0) _deckKeysHost.__linkupDeckShopKeys = keys;
+        return keys;
     }
     return [];
 }
 
 export function saveDeckShopKeys(keys: string[]): void {
+    const uniq = [...new Set(keys.map((k) => String(k)))];
+    _deckKeysHost.__linkupDeckShopKeys = uniq;
     try {
-        sys.localStorage.setItem(DECK_SHOP_KEYS, JSON.stringify([...new Set(keys)]));
+        sys.localStorage.setItem(DECK_SHOP_KEYS, JSON.stringify(uniq));
     } catch {
         /* 忽略 */
     }
 }
 
-/** 商店模式：返回对局用 typeId 列表；无效时 null */
+/** 商店模式：返回对局用 typeId 列表；无效时 null。会自动补默认前 30 种。 */
 export function loadDeckTypeIdsForGameShop(groups: ShopCatalogGroup[]): number[] | null {
-    const keys = loadDeckShopKeysRaw(groups);
+    const prefer = getDefaultOwnedShopKeys(groups);
+    ensureDefaultDeckSelection(groups, prefer);
+    let keys = loadDeckShopKeysRaw(groups, prefer);
+    if (keys.length < MIN_DECK_TYPE_COUNT && prefer.length >= MIN_DECK_TYPE_COUNT) {
+        keys = prefer.slice(0, MIN_DECK_TYPE_COUNT);
+        saveDeckShopKeys(keys);
+    }
     if (keys.length < MIN_DECK_TYPE_COUNT || keys.length > MAX_DECK_TYPE_COUNT) return null;
     const ids = deckShopKeysToTypeIds(keys, groups);
     if (ids.length < MIN_DECK_TYPE_COUNT) return null;

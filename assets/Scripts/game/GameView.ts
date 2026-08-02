@@ -300,7 +300,7 @@ export class GameView extends Component {
         this._wireBoardCallbacks();
     }
 
-    /** 暗牌背面贴图，由 GameApp 注入；未配置则棋盘从 resources/cube/暗牌 加载 */
+    /** 暗牌背面贴图，由 GameApp 注入；未配置则棋盘从 button/cube/暗牌 加载 */
     setHiddenTileSprite(frame: SpriteFrame | null) {
         this._hiddenTileSpriteCache = frame;
         this._board?.setHiddenTileSprite(frame);

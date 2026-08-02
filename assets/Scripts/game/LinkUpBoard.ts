@@ -22,17 +22,18 @@ import {
     Tween,
 } from 'cc';
 import { LinkUpPathFinder } from './LinkUpPathFinder';
-import { MIN_DECK_TYPE_COUNT } from '../util/DeckSelectionStorage';
+import { MIN_DECK_TYPE_COUNT, TILE_SPRITE_SLOTS } from '../util/DeckConstants';
 import { linkWarn } from '../util/LinkUpDebug';
 
 const { ccclass } = _decorator;
+
+/** App 上可配置的棋盘格子贴图槽位数：第 n 项对应「n 号类型」（与格子数字一致） */
+export { TILE_SPRITE_SLOTS };
 
 /** 固定 14 行 × 8 列 = 112 格；卡组最多 40 种类型（每种偶数张，总和 112，见 _buildFullLevelBag） */
 export const BOARD_ROWS = 14;
 export const BOARD_COLS = 8;
 export const TYPE_COUNT = 40;
-/** App 上可配置的棋盘格子贴图槽位数：第 n 项对应「n 号类型」（与格子数字一致） */
-export const TILE_SPRITE_SLOTS = 40;
 
 export type GravityDir = 'left' | 'right' | 'up' | 'down';
 /** 由垂直中线向上下靠齐 / 由水平中线向左右靠齐 */
@@ -90,7 +91,7 @@ export function getLevelEnterTip(level: number): string | null {
 }
 
 /** 暗牌贴图 resources 路径（相对 assets/resources/） */
-export const HIDDEN_TILE_RES = 'cube/暗牌';
+export const HIDDEN_TILE_RES = 'button/暗牌';
 
 /** 当前是否在本关生成暗牌（暂仅第 8 关） */
 export function hasHiddenTilesForLevel(level: number): boolean {
@@ -193,7 +194,7 @@ export class LinkUpBoard extends Component {
     /** 动态发牌全部落子完成后 */
     onDealComplete: (() => void) | null = null;
 
-    /** 暗牌背面贴图（GameApp 注入；未配置则运行时加载 cube/暗牌） */
+    /** 暗牌背面贴图（GameApp 注入；未配置则运行时加载 button/暗牌） */
     private _hiddenTileSprite: SpriteFrame | null = null;
     /** 各格是否为暗牌（未翻转） */
     private _hidden: boolean[][] = [];
@@ -304,7 +305,7 @@ export class LinkUpBoard extends Component {
         this._level = Math.max(1, Math.floor(level));
     }
 
-    /** 暗牌背面贴图；不配置则开局时从 resources/cube/暗牌 加载 */
+    /** 暗牌背面贴图；不配置则开局时从 resources/button/暗牌 加载 */
     setHiddenTileSprite(frame: SpriteFrame | null) {
         this._hiddenTileSprite = frame;
         if (this._cells.length === BOARD_ROWS && this._cells[0]?.length === BOARD_COLS) {

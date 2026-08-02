@@ -347,6 +347,14 @@
         "__expectedType__": "cc.SpriteFrame"
       },
       {
+        "__uuid__": "4643e45b-ead0-432f-a4fb-46722f7eec34@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
+        "__uuid__": "aa27edf7-8333-4d27-8953-dbcc553034a6@f9941",
+        "__expectedType__": "cc.SpriteFrame"
+      },
+      {
         "__uuid__": "483e5564-2387-49b8-9491-d459351d8726@f9941",
         "__expectedType__": "cc.SpriteFrame"
       },
@@ -400,14 +408,6 @@
       },
       {
         "__uuid__": "174a5a54-4a39-4bdd-897d-2a3efd2cdd66@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "4643e45b-ead0-432f-a4fb-46722f7eec34@f9941",
-        "__expectedType__": "cc.SpriteFrame"
-      },
-      {
-        "__uuid__": "aa27edf7-8333-4d27-8953-dbcc553034a6@f9941",
         "__expectedType__": "cc.SpriteFrame"
       },
       {
@@ -522,7 +522,7 @@
       "__expectedType__": "cc.SpriteFrame"
     },
     "homeBtnShopPressed": {
-      "__uuid__": "5b432b1d-880c-4852-b03b-18d11415a1c3@f9941",
+      "__uuid__": "bb73a7ef-d2ff-4543-9a75-174dafe442d7@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "deckDialogPanelBg": {
@@ -573,6 +573,8 @@
       "__uuid__": "c97490c2-9aca-4b6c-90d7-4d7400304e6a@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
+    "hiddenTileSprite": null,
+    "sfxHiddenFlip": null,
     "testMode": true,
     "testLevel": 8,
     "shopLandAnimalSprites": [
@@ -959,7 +961,7 @@
         "__expectedType__": "cc.SpriteFrame"
       },
       {
-        "__uuid__": "b2ad087f-333a-4d15-8c40-fe65e8945e6d@f9941",
+        "__uuid__": "c42a49b1-e502-4b82-98af-0e0cbd90d99e@f9941",
         "__expectedType__": "cc.SpriteFrame"
       },
       {

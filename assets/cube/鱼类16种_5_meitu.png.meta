@@ -1,0 +1,134 @@
+{
+  "ver": "1.0.27",
+  "importer": "image",
+  "imported": true,
+  "uuid": "3693d1d2-0cfd-4b63-b958-a001295fa022",
+  "files": [
+    ".json",
+    ".png"
+  ],
+  "subMetas": {
+    "6c48a": {
+      "importer": "texture",
+      "uuid": "3693d1d2-0cfd-4b63-b958-a001295fa022@6c48a",
+      "displayName": "鱼类16种_5_meitu",
+      "id": "6c48a",
+      "name": "texture",
+      "userData": {
+        "wrapModeS": "clamp-to-edge",
+        "wrapModeT": "clamp-to-edge",
+        "imageUuidOrDatabaseUri": "3693d1d2-0cfd-4b63-b958-a001295fa022",
+        "isUuid": true,
+        "visible": false,
+        "minfilter": "linear",
+        "magfilter": "linear",
+        "mipfilter": "none",
+        "anisotropy": 0
+      },
+      "ver": "1.0.22",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "f9941": {
+      "importer": "sprite-frame",
+      "uuid": "3693d1d2-0cfd-4b63-b958-a001295fa022@f9941",
+      "displayName": "鱼类16种_5_meitu",
+      "id": "f9941",
+      "name": "spriteFrame",
+      "userData": {
+        "trimThreshold": 1,
+        "rotated": false,
+        "offsetX": 4,
+        "offsetY": 0.5,
+        "trimX": 10,
+        "trimY": 3,
+        "width": 88,
+        "height": 92,
+        "rawWidth": 100,
+        "rawHeight": 99,
+        "borderTop": 0,
+        "borderBottom": 0,
+        "borderLeft": 0,
+        "borderRight": 0,
+        "packable": true,
+        "pixelsToUnit": 100,
+        "pivotX": 0.5,
+        "pivotY": 0.5,
+        "meshType": 0,
+        "vertices": {
+          "rawPosition": [
+            -44,
+            -46,
+            0,
+            44,
+            -46,
+            0,
+            -44,
+            46,
+            0,
+            44,
+            46,
+            0
+          ],
+          "indexes": [
+            0,
+            1,
+            2,
+            2,
+            1,
+            3
+          ],
+          "uv": [
+            10,
+            96,
+            98,
+            96,
+            10,
+            4,
+            98,
+            4
+          ],
+          "nuv": [
+            0.1,
+            0.04040404040404041,
+            0.98,
+            0.04040404040404041,
+            0.1,
+            0.9696969696969697,
+            0.98,
+            0.9696969696969697
+          ],
+          "minPos": [
+            -44,
+            -46,
+            0
+          ],
+          "maxPos": [
+            44,
+            46,
+            0
+          ]
+        },
+        "isUuid": true,
+        "imageUuidOrDatabaseUri": "3693d1d2-0cfd-4b63-b958-a001295fa022@6c48a",
+        "atlasUuid": "",
+        "trimType": "auto"
+      },
+      "ver": "1.0.12",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    }
+  },
+  "userData": {
+    "type": "sprite-frame",
+    "fixAlphaTransparencyArtifacts": false,
+    "hasAlpha": true,
+    "redirect": "3693d1d2-0cfd-4b63-b958-a001295fa022@6c48a"
+  }
+}

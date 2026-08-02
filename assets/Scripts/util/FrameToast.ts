@@ -10,20 +10,33 @@ import {
     UITransform,
     Widget,
 } from 'cc';
-import { applyLabelBlackOutline } from './DialogPanelBg';
 import { getLayoutSizeForNode } from './ViewSize';
 
 const TOAST_FRAME_RES = '提示框4';
 const TOAST_EXTRA_W = 100;
-const TOAST_FONT_SIZE = 22;
+/** 默认字号（较先前 +1 号）；行高略大于字号，避免描边后字距过紧 */
+const TOAST_FONT_SIZE = 24;
+const TOAST_LINE_HEIGHT_EXTRA = 8;
 const TOAST_MIDDLE_PAD_H = 8;
 const TOAST_SLICE_CAP_X_RATIO = 0.11;
 const TOAST_SLICE_CAP_Y_RATIO = 0.06;
-const TOAST_TEXT_OFFSET_Y = 5;
-/** 默认提示文案色；与商店金币数同色见 {@link TOAST_COIN_TEXT_COLOR} */
-const TOAST_DEFAULT_TEXT_COLOR = new Color(0x5a, 0x3e, 0x28, 255);
+/** 文案在提示框内竖直居中；勿再上移，否则会看起来偏上 */
+const TOAST_TEXT_OFFSET_Y = 0;
+const TOAST_OUTLINE_WIDTH = 2;
+/** 默认提示：白边黑字 */
+const TOAST_DEFAULT_TEXT_COLOR = Color.BLACK;
 /** 与首页/商店金币数字一致的金色 */
 export const TOAST_COIN_TEXT_COLOR = new Color(0xe9, 0xc4, 0x6a, 255);
+
+function toastLineHeight(fontSize: number) {
+    return fontSize + TOAST_LINE_HEIGHT_EXTRA;
+}
+
+function applyToastLabelOutline(lab: Label) {
+    lab.enableOutline = true;
+    lab.outlineColor = Color.WHITE;
+    lab.outlineWidth = TOAST_OUTLINE_WIDTH;
+}
 
 let _toastBg: SpriteFrame | null = null;
 
@@ -91,7 +104,7 @@ function measureToastText(
     const lab = n.addComponent(Label);
     lab.string = message;
     lab.fontSize = fontSize;
-    lab.lineHeight = fontSize;
+    lab.lineHeight = toastLineHeight(fontSize);
     lab.enableWrapText = wrap;
     lab.overflow = wrap ? Label.Overflow.RESIZE_HEIGHT : Label.Overflow.NONE;
     lab.horizontalAlign = Label.HorizontalAlign.CENTER;
@@ -185,13 +198,13 @@ function mountToastLabel(
     const lab = labN.addComponent(Label);
     lab.string = message;
     lab.fontSize = TOAST_FONT_SIZE;
-    lab.lineHeight = TOAST_FONT_SIZE;
+    lab.lineHeight = toastLineHeight(TOAST_FONT_SIZE);
     lab.color = textColor;
     lab.horizontalAlign = Label.HorizontalAlign.CENTER;
     lab.verticalAlign = Label.VerticalAlign.CENTER;
     lab.overflow = Label.Overflow.CLAMP;
     lab.enableWrapText = message.includes('\n') || message.length > 14;
-    applyLabelBlackOutline(lab, 1);
+    applyToastLabelOutline(lab);
     lab.updateRenderData(true);
     host.scheduleOnce(() => {
         if (!labN.isValid) return;

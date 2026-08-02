@@ -15,6 +15,7 @@ import {
     Widget,
     view,
 } from 'cc';
+import { loadCubeShopSpriteGroups, pickRicherSpriteList, type CubeShopSpriteGroups } from './util/CubeShopLoader';
 import {
     GameView,
     type GameSfxConfig,
@@ -27,12 +28,14 @@ import { DeckSelectDialog } from './game/DeckSelectDialog';
 import { ShopDialog } from './game/ShopDialog';
 import { TILE_SPRITE_SLOTS } from './game/LinkUpBoard';
 import {
+    collectDeckEntriesForUi,
+    ensureDefaultDeckSelection,
     getConfiguredTypeIds,
-    getPurchasedDeckEntries,
     loadDeckShopKeysRaw,
     loadDeckTypeIdsForGame,
     MAX_DECK_TYPE_COUNT,
     MIN_DECK_TYPE_COUNT,
+    saveDeckShopKeys,
 } from './util/DeckSelectionStorage';
 import {
     addCoins,
@@ -43,7 +46,10 @@ import {
 } from './util/PlayerResourceStorage';
 import {
     buildShopCatalog,
+    buildTileFacesFromDeckEntries,
     buildTileFacesFromDeckKeys,
+    deckEntriesToTypeIds,
+    getDefaultOwnedEntries,
     getDefaultOwnedShopKeys,
     hasShopCatalog,
     type ShopCatalogGroup,
@@ -169,7 +175,7 @@ export class GameApp extends Component {
     @property({ type: SpriteFrame, tooltip: '金币图标（首页与商店内展示）' })
     coinIcon: SpriteFrame | null = null;
 
-    @property({ type: SpriteFrame, tooltip: '暗牌背面贴图；不配置则运行时从 resources/cube/暗牌 加载' })
+    @property({ type: SpriteFrame, tooltip: '暗牌背面贴图；不配置则运行时从 button/cube/暗牌 加载' })
     hiddenTileSprite: SpriteFrame | null = null;
 
     @property({ type: AudioClip, tooltip: '暗牌翻转显露本来图案时播放；不配置则不播放' })
@@ -203,6 +209,10 @@ export class GameApp extends Component {
     private _game: GameView | null = null;
     private _shopEnabled = false;
     private _shopGroups: ShopCatalogGroup[] = [];
+    /** cube 分包加载得到的分组贴图（微信端编辑器引用可能为空） */
+    private _cubeShopSprites: CubeShopSpriteGroups | null = null;
+    private _cubeShopLoading = false;
+    private _cubeShopWaiters: Array<() => void> = [];
     /** 防止连点卡组/商店时在主线程重复构建弹窗 */
     private _homeDialogOpening = false;
     private _bgmSource: AudioSource | null = null;
@@ -232,7 +242,6 @@ export class GameApp extends Component {
         gameN.active = false;
 
         this._applyHomeViewInit();
-        this._rebuildShopCatalog();
 
         this._setLayerRecursive(this.node, GameApp._defaultSceneLayerMask());
 
@@ -264,9 +273,6 @@ export class GameApp extends Component {
         if (this._game) {
             this._game.onBack = () => this._onGameBack();
             this._game.onLevelWin = (count) => this._onLevelWin(count);
-            this._syncGameModeFlags();
-            this._game.setTileFaceSprites(this._getTileFacesForGame());
-            this._syncDeckToGameView();
             const toolBtns: GameToolButtonSprites = {
                 backNormal: this.toolBtnBackNormal,
                 backPressed: this.toolBtnBackPressed,
@@ -301,6 +307,14 @@ export class GameApp extends Component {
         }
         this._refreshHomeCoins();
         this._startBgm();
+        // 微信小游戏：cube 为独立分包，需先 loadBundle 再构建商店/赠送
+        this._withCubeShopReady(() => {
+            if (!this.isValid) return;
+            this._rebuildShopCatalog();
+            this._syncGameModeFlags();
+            this._game?.setTileFaceSprites(this._getTileFacesForGame());
+            this._syncDeckToGameView();
+        });
         this.scheduleOnce(() => this._debugPipelineSnapshot('GameApp.start+0'), 0);
     }
 
@@ -334,20 +348,72 @@ export class GameApp extends Component {
         src.play();
     }
 
-    private _rebuildShopCatalog() {
-        const catalog = buildShopCatalog({
-            tileFaces: this.tileFaceSprites ?? [],
-            landAnimals: this.shopLandAnimalSprites ?? [],
-            aquaticAnimals: this.shopAquaticAnimalSprites ?? [],
-            fruits: this.shopFruitSprites ?? [],
-            snacks: this.shopSnackSprites ?? [],
-            vegetables: this.shopVegetableSprites ?? [],
-            pastries: this.shopPastrySprites ?? [],
+    /** 确保 cube 分包已加载；编辑器预览若无 bundle 也会走回调（用序列化贴图） */
+    private _withCubeShopReady(done: () => void) {
+        if (this._cubeShopSprites) {
+            done();
+            return;
+        }
+        this._cubeShopWaiters.push(done);
+        if (this._cubeShopLoading) return;
+        this._cubeShopLoading = true;
+        loadCubeShopSpriteGroups((groups) => {
+            this._cubeShopSprites = groups;
+            this._cubeShopLoading = false;
+            const waiters = this._cubeShopWaiters.splice(0, this._cubeShopWaiters.length);
+            for (const cb of waiters) {
+                try {
+                    cb();
+                } catch (e) {
+                    linkWarn('GameApp._withCubeShopReady', 'callback failed', e);
+                }
+            }
         });
-        this._shopGroups = catalog.groups;
-        this._shopEnabled = hasShopCatalog(this._shopGroups);
-        if (this._shopEnabled) {
-            ensureDefaultShopOwnership(getDefaultOwnedShopKeys(this._shopGroups));
+    }
+
+    private _rebuildShopCatalog() {
+        try {
+            const bundle = this._cubeShopSprites;
+            const catalog = buildShopCatalog({
+                tileFaces: this.tileFaceSprites ?? [],
+                landAnimals: pickRicherSpriteList(this.shopLandAnimalSprites, bundle?.landAnimals),
+                aquaticAnimals: pickRicherSpriteList(this.shopAquaticAnimalSprites, bundle?.aquaticAnimals),
+                fruits: pickRicherSpriteList(this.shopFruitSprites, bundle?.fruits),
+                snacks: pickRicherSpriteList(this.shopSnackSprites, bundle?.snacks),
+                vegetables: pickRicherSpriteList(this.shopVegetableSprites, bundle?.vegetables),
+                pastries: pickRicherSpriteList(this.shopPastrySprites, bundle?.pastries),
+            });
+            this._shopGroups = catalog.groups;
+            this._shopEnabled = hasShopCatalog(this._shopGroups);
+            if (!this._shopEnabled) return;
+
+            const giftEntries = getDefaultOwnedEntries(this._shopGroups);
+            const giftKeys = giftEntries.map((e) => e.shopKey);
+            const ownedKeys = ensureDefaultShopOwnership(giftKeys);
+            const deckEntries = collectDeckEntriesForUi(this._shopGroups);
+            ensureDefaultDeckSelection(
+                this._shopGroups,
+                deckEntries.map((e) => e.shopKey),
+            );
+            linkLog('GameApp._rebuildShopCatalog', {
+                groups: this._shopGroups.map((g) => `${g.groupKey}:${g.items.length}`),
+                giftEntries: giftEntries.length,
+                giftKeys: giftKeys.length,
+                ownedKeys: ownedKeys.length,
+                deckEntries: deckEntries.length,
+                sampleGift: giftKeys.slice(0, 3),
+                sampleEntryKey: deckEntries.slice(0, 3).map((e) => e.shopKey),
+                fromCubeBundle: !!bundle,
+            });
+            if (deckEntries.length < MIN_DECK_TYPE_COUNT) {
+                linkWarn('GameApp._rebuildShopCatalog', '可选方块不足 30 种', {
+                    giftEntries: giftEntries.length,
+                    deckEntries: deckEntries.length,
+                });
+            }
+        } catch (e) {
+            linkWarn('GameApp._rebuildShopCatalog', '商店目录构建失败', e);
+            this._shopEnabled = hasShopCatalog(this._shopGroups);
         }
     }
 
@@ -382,7 +448,8 @@ export class GameApp extends Component {
 
     private _getTileFacesForGame(): Array<SpriteFrame | null> {
         if (this._shopEnabled) {
-            const keys = loadDeckShopKeysRaw(this._shopGroups);
+            const prefer = getDefaultOwnedShopKeys(this._shopGroups);
+            const keys = loadDeckShopKeysRaw(this._shopGroups, prefer);
             if (keys.length >= MIN_DECK_TYPE_COUNT) {
                 return buildTileFacesFromDeckKeys(this._shopGroups, keys);
             }
@@ -493,45 +560,80 @@ export class GameApp extends Component {
     }
 
     private _onHomeStartGame() {
-        const faces = this._getTileFacesForGame();
-        if (this._shopEnabled) {
-            const owned = getPurchasedDeckEntries(this._shopGroups).length;
-            if (owned < MIN_DECK_TYPE_COUNT) {
-                this._home?.showToast(
-                    `请先在「商店」获得至少 ${MIN_DECK_TYPE_COUNT} 种方块，并在「配置卡组」中勾选 ${MIN_DECK_TYPE_COUNT}～${MAX_DECK_TYPE_COUNT} 种后再开始。`,
-                );
-                return;
-            }
-            const ids = loadDeckTypeIdsForGame(faces, true, this._shopGroups);
-            if (!ids) {
-                this._home?.showToast(
-                    `请先在「配置卡组」中选择 ${MIN_DECK_TYPE_COUNT}～${MAX_DECK_TYPE_COUNT} 种方块后再开始游戏。`,
-                );
-                return;
-            }
-            this._game?.setTileFaceSprites(buildTileFacesFromDeckKeys(this._shopGroups, loadDeckShopKeysRaw(this._shopGroups)));
-            this._game?.setDeckTypeIds(ids);
-        } else {
-            const configured = getConfiguredTypeIds(faces);
-            if (configured.length >= MIN_DECK_TYPE_COUNT) {
-                const ids = loadDeckTypeIdsForGame(faces, false);
-                if (!ids) {
-                    this._home?.showToast(
-                        `请先在「配置卡组」中选择 ${MIN_DECK_TYPE_COUNT}～${MAX_DECK_TYPE_COUNT} 种方块后再开始游戏。`,
-                    );
+        this._withCubeShopReady(() => {
+            if (!this.isValid) return;
+            this._rebuildShopCatalog();
+
+            // 商店模式（或已能凑出赠送卡组）：直接用 deckEntries 贴图开局，不再反查 shopKey
+            const deckEntries = this._shopEnabled ? collectDeckEntriesForUi(this._shopGroups) : [];
+            if (deckEntries.length >= MIN_DECK_TYPE_COUNT) {
+                const ownedKeys = deckEntries.map((e) => e.shopKey);
+                ensureDefaultDeckSelection(this._shopGroups, ownedKeys);
+                let keys = loadDeckShopKeysRaw(this._shopGroups, ownedKeys);
+                if (keys.length < MIN_DECK_TYPE_COUNT) {
+                    keys = ownedKeys.slice(0, MIN_DECK_TYPE_COUNT);
+                    saveDeckShopKeys(keys);
+                }
+                // 按 key 从 deckEntries 取 sprite；取不够则直接用前 30 条
+                const picked: typeof deckEntries = [];
+                const byKey: Record<string, (typeof deckEntries)[0]> = Object.create(null);
+                for (let i = 0; i < deckEntries.length; i++) {
+                    byKey[String(deckEntries[i].shopKey)] = deckEntries[i];
+                }
+                for (let i = 0; i < keys.length && picked.length < MAX_DECK_TYPE_COUNT; i++) {
+                    const e = byKey[String(keys[i])];
+                    if (e?.sprite) picked.push(e);
+                }
+                if (picked.length < MIN_DECK_TYPE_COUNT) {
+                    picked.length = 0;
+                    for (let i = 0; i < deckEntries.length && picked.length < MIN_DECK_TYPE_COUNT; i++) {
+                        if (deckEntries[i].sprite) picked.push(deckEntries[i]);
+                    }
+                    saveDeckShopKeys(picked.map((e) => e.shopKey));
+                }
+                const ids = deckEntriesToTypeIds(picked);
+                if (ids.length < MIN_DECK_TYPE_COUNT) {
+                    this._home?.showToast(`可用方块不足 ${MIN_DECK_TYPE_COUNT} 种，请检查商店资源配置。`);
                     return;
                 }
+                this._game?.setTileFaceSprites(buildTileFacesFromDeckEntries(picked));
                 this._game?.setDeckTypeIds(ids);
-            } else if (configured.length > 0) {
+                linkLog('GameApp._onHomeStartGame', {
+                    mode: 'shop-deck',
+                    picked: picked.length,
+                    ids: ids.length,
+                });
+                this._enterGame();
+                return;
+            }
+
+            const faces = this._getTileFacesForGame();
+            const configured = getConfiguredTypeIds(faces);
+            if (configured.length >= MIN_DECK_TYPE_COUNT) {
+                // 非商店：默认用已配置贴图前 30 种，免去先开配置卡组
+                let ids = loadDeckTypeIdsForGame(faces, false);
+                if (!ids || ids.length < MIN_DECK_TYPE_COUNT) {
+                    ids = configured.slice(0, MIN_DECK_TYPE_COUNT);
+                }
+                this._game?.setDeckTypeIds(ids);
+                this._enterGame();
+                return;
+            }
+            if (configured.length > 0) {
                 this._home?.showToast(
                     `请至少在 GameApp 中配置 ${MIN_DECK_TYPE_COUNT} 种格子贴图；当前仅 ${configured.length} 种。`,
                 );
                 return;
-            } else {
-                this._game?.setDeckTypeIds(null);
             }
-        }
-        this._enterGame();
+            if (this._shopEnabled) {
+                this._home?.showToast(
+                    `请先在「商店」获得至少 ${MIN_DECK_TYPE_COUNT} 种方块后再开始。`,
+                );
+                return;
+            }
+            this._game?.setDeckTypeIds(null);
+            this._enterGame();
+        });
     }
 
     private _openDeckDialog() {
@@ -539,16 +641,27 @@ export class GameApp extends Component {
         if (!hr || this._homeDialogOpening) return;
         if (hr.getChildByName('DeckSelectModal')) return;
         this._homeDialogOpening = true;
-        this.scheduleOnce(() => {
+        this._withCubeShopReady(() => {
             this._homeDialogOpening = false;
             if (!hr.isValid || hr.getChildByName('DeckSelectModal')) return;
+            this._rebuildShopCatalog();
+            const deckEntries = collectDeckEntriesForUi(this._shopGroups);
+            ensureDefaultDeckSelection(
+                this._shopGroups,
+                deckEntries.map((e) => e.shopKey),
+            );
+            linkLog('GameApp._openDeckDialog', {
+                shopEnabled: this._shopEnabled,
+                deckEntries: deckEntries.length,
+                sample: deckEntries.slice(0, 3).map((e) => e.shopKey),
+            });
             DeckSelectDialog.open(hr, {
                 tileFaces: this._getTileFacesForGame(),
                 panelBg: this.deckDialogPanelBg,
                 actionButtons: this._getDialogActionButtons(),
                 shopEnabled: this._shopEnabled,
                 shopGroups: this._shopGroups.length > 0 ? this._shopGroups : undefined,
-                deckEntries: this._shopEnabled ? getPurchasedDeckEntries(this._shopGroups) : undefined,
+                deckEntries: this._shopEnabled ? deckEntries : undefined,
                 onSaved: (ids) => {
                     this._game?.setDeckTypeIds(ids);
                     if (this._shopEnabled) {
@@ -556,7 +669,7 @@ export class GameApp extends Component {
                     }
                 },
             });
-        }, 0);
+        });
     }
 
     private _openShopDialog() {
@@ -564,7 +677,7 @@ export class GameApp extends Component {
         if (!hr || this._homeDialogOpening) return;
         if (hr.getChildByName('ShopModal')) return;
         this._homeDialogOpening = true;
-        this.scheduleOnce(() => {
+        this._withCubeShopReady(() => {
             this._homeDialogOpening = false;
             if (!hr.isValid || hr.getChildByName('ShopModal')) return;
             this._rebuildShopCatalog();
@@ -572,6 +685,8 @@ export class GameApp extends Component {
                 this._home?.showToast('请先在 GameApp 的商店分组中配置方块贴图。');
                 return;
             }
+            // 再补一次赠送，保证「已拥有」徽章与卡组一致
+            ensureDefaultShopOwnership(getDefaultOwnedShopKeys(this._shopGroups));
 
             ShopDialog.open(hr, {
                 groups: this._shopGroups,
@@ -590,7 +705,7 @@ export class GameApp extends Component {
                 },
                 onCoinsChanged: () => this._refreshHomeCoins(),
             });
-        }, 0);
+        });
     }
 
     private _enterGame() {
