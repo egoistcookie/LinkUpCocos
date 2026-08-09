@@ -7,6 +7,11 @@ const PROPS_KEY = 'linkup_v1_props';
 /** 赠送方案版本；变更后会再次合并补全默认方块 */
 const SHOP_DEFAULTS_KEY = 'linkup_v1_shop_defaults_ver';
 const SHOP_DEFAULTS_VER = 'gift35-v1';
+/** 初始道具赠送版本；仅对尚未写入道具库存的玩家生效 */
+const PROP_DEFAULTS_KEY = 'linkup_v1_prop_defaults_ver';
+const PROP_DEFAULTS_VER = 'gift3-v1';
+/** 新玩家三种道具各赠送数量 */
+const INITIAL_PROP_EACH = 3;
 
 export type PurchaseResult = 'success' | 'already_owned' | 'insufficient_coins' | 'invalid';
 
@@ -184,6 +189,45 @@ export function ensureDefaultShopOwnership(defaultKeys: unknown): string[] {
 
 function defaultPropCounts(): PropCounts {
     return { hint: 0, refresh: 0, eliminate: 0 };
+}
+
+function initialGiftPropCounts(): PropCounts {
+    return {
+        hint: INITIAL_PROP_EACH,
+        refresh: INITIAL_PROP_EACH,
+        eliminate: INITIAL_PROP_EACH,
+    };
+}
+
+/**
+ * 新玩家初始化：提示 / 刷新 / 消除各赠送 INITIAL_PROP_EACH 个。
+ * 仅在本地尚未写入过道具库存时赠送，已有存档不覆盖。
+ */
+export function ensureDefaultPropCounts(): PropCounts {
+    let alreadyMarked = false;
+    try {
+        alreadyMarked = String(sys.localStorage.getItem(PROP_DEFAULTS_KEY) ?? '') === PROP_DEFAULTS_VER;
+    } catch {
+        /* 忽略 */
+    }
+    if (!alreadyMarked) {
+        let hasProps = false;
+        try {
+            const s = sys.localStorage.getItem(PROPS_KEY) as unknown;
+            hasProps = s != null && s !== '';
+        } catch {
+            /* 忽略 */
+        }
+        if (!hasProps) {
+            writeJson(PROPS_KEY, initialGiftPropCounts());
+        }
+        try {
+            sys.localStorage.setItem(PROP_DEFAULTS_KEY, PROP_DEFAULTS_VER);
+        } catch {
+            /* 忽略 */
+        }
+    }
+    return loadPropCounts();
 }
 
 export function loadPropCounts(): PropCounts {

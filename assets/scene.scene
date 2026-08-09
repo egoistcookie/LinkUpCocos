@@ -575,7 +575,7 @@
     },
     "hiddenTileSprite": null,
     "sfxHiddenFlip": null,
-    "testMode": true,
+    "testMode": false,
     "testLevel": 8,
     "shopLandAnimalSprites": [
       {

@@ -39,6 +39,7 @@ import {
 } from './util/DeckSelectionStorage';
 import {
     addCoins,
+    ensureDefaultPropCounts,
     ensureDefaultShopOwnership,
     loadCoins,
     loadCurrentLevel,
@@ -269,6 +270,7 @@ export class GameApp extends Component {
         linkLog('GameApp.start', 'enter', { path: nodePath(this.node) });
         this._syncCanvasOrthoAndAppSize();
         this.scheduleOnce(() => this._syncCanvasOrthoAndAppSize(), 0);
+        ensureDefaultPropCounts();
         this._home?.setConfiguredBackground(this.homeBackground);
         if (this._game) {
             this._game.onBack = () => this._onGameBack();
@@ -385,6 +387,8 @@ export class GameApp extends Component {
             });
             this._shopGroups = catalog.groups;
             this._shopEnabled = hasShopCatalog(this._shopGroups);
+            // 新玩家道具赠送与商店是否启用无关
+            ensureDefaultPropCounts();
             if (!this._shopEnabled) return;
 
             const giftEntries = getDefaultOwnedEntries(this._shopGroups);
