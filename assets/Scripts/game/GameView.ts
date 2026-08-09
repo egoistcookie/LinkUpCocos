@@ -19,7 +19,7 @@ import {
     openLevelClearOverlay,
     type LevelClearDialogConfig,
 } from './LevelClearOverlay';
-import { getStableVisibleSize } from '../util/ViewSize';
+import { getSafeAreaTopInset, getStableVisibleSize } from '../util/ViewSize';
 import { consumeProp, type PropKind } from '../util/PlayerResourceStorage';
 import { showFrameToast } from '../util/FrameToast';
 
@@ -103,6 +103,7 @@ function boardHolderLayoutFromRoot(root: Node): {
     const vs = getStableVisibleSize();
     const lw = ut && ut.width > 1 ? ut.width : vs.width;
     const lh = ut && ut.height > 1 ? ut.height : vs.height;
+    const safeTop = getSafeAreaTopInset();
     const BAR_TOP = 88;
     const BAR_BOT = 100;
     const STRIP_GAP = 12;
@@ -111,8 +112,8 @@ function boardHolderLayoutFromRoot(root: Node): {
     const boardSideInset = 24 + 50;
     return {
         w: lw - boardSideInset * 2,
-        h: lh - edgeInset * 2 - BOARD_SLOT_H_SHRINK,
-        top: edgeInset + BOARD_SLOT_H_SHRINK_HALF,
+        h: lh - edgeInset * 2 - BOARD_SLOT_H_SHRINK - safeTop,
+        top: edgeInset + BOARD_SLOT_H_SHRINK_HALF + safeTop,
         bottom: edgeInset + BOARD_SLOT_H_SHRINK_HALF,
         left: boardSideInset,
         right: boardSideInset,
@@ -141,6 +142,9 @@ export class GameView extends Component {
     private _pendingStartLevel: number | null = null;
     /** 防止重复 schedule / pending 导致连续两次 buildLevel 打断发牌 */
     private _buildLevelGen = 0;
+    /** 异步 _buildUi 完成后为 true；供 GameApp 在棋盘就绪后再注入卡组/开局 */
+    private _uiReady = false;
+    private _uiReadyWaiters: Array<() => void> = [];
     /** GameApp 注入的全屏游戏页背景；未配置则不建 GameBg */
     private _gameBackground: SpriteFrame | null = null;
     private _gameBgNode: Node | null = null;
@@ -213,20 +217,51 @@ export class GameView extends Component {
         board.buildLevel();
     }
 
-    /** 棋盘格子贴图（与 TILE_SPRITE_SLOTS 一致，由 GameApp 注入） */
-    setTileFaceSprites(frames: Array<SpriteFrame | null>) {
-        this._tileFaceCache = frames.length > 0 ? [...frames] : [];
+    /** UI/棋盘已建好时立即回调，否则等 _buildUi 结束（避免贴图未注入就 setDeckTypeIds） */
+    whenUiReady(cb: () => void) {
+        if (this._uiReady && this._board) {
+            cb();
+            return;
+        }
+        this._uiReadyWaiters.push(cb);
+    }
+
+    /**
+     * 原子注入贴图 + 卡组，避免「先设 typeId、贴图仍是旧的 1 张」触发误报。
+     */
+    applyTileFacesAndDeck(faces: Array<SpriteFrame | null> | null, typeIds: number[] | null) {
+        if (faces && faces.length > 0) {
+            const copy: Array<SpriteFrame | null> = [];
+            for (let i = 0; i < faces.length; i++) copy.push(faces[i] ?? null);
+            this._tileFaceCache = copy;
+        }
+        // 手动拷贝，避免微信端对 Array spread / Set 去重异常
+        let idsCopy: number[] | null = null;
+        if (typeIds && typeIds.length > 0) {
+            idsCopy = [];
+            for (let i = 0; i < typeIds.length; i++) {
+                const n = Number(typeIds[i]);
+                if (Number.isFinite(n)) idsCopy.push(n | 0);
+            }
+        }
+        this._deckTypeIds = idsCopy && idsCopy.length > 0 ? idsCopy : null;
         if (this._board) {
-            this._board.setTileFaceSprites(this._tileFaceCache);
-            this._applyDeckToBoard();
+            if (this._tileFaceCache) {
+                this._board.setTileFaceSprites(this._tileFaceCache);
+            }
+            this._board.setDeckTypeIds(this._deckTypeIds);
         }
         this._wireBoardCallbacks();
     }
 
+    /** 棋盘格子贴图（与 TILE_SPRITE_SLOTS 一致，由 GameApp 注入） */
+    setTileFaceSprites(frames: Array<SpriteFrame | null>) {
+        this.applyTileFacesAndDeck(frames, this._deckTypeIds);
+    }
+
     /** 由 GameApp 根据本地卡组或 null（恢复为全部已配置类型）注入 */
     setDeckTypeIds(typeIds: number[] | null) {
-        this._deckTypeIds = typeIds && typeIds.length > 0 ? [...typeIds] : null;
-        this._applyDeckToBoard();
+        this.applyTileFacesAndDeck(this._tileFaceCache, typeIds);
     }
 
     setShopPropsEnabled(enabled: boolean) {
@@ -235,15 +270,6 @@ export class GameView extends Component {
 
     setTestMode(enabled: boolean) {
         this._testMode = enabled;
-    }
-
-    private _applyDeckToBoard() {
-        if (!this._board) return;
-        if (this._deckTypeIds && this._deckTypeIds.length > 0) {
-            this._board.setDeckTypeIds(this._deckTypeIds);
-        } else {
-            this._board.setDeckTypeIds(null);
-        }
     }
 
     /** 顶栏返回 + 底栏提示/刷新/消除 共 8 张（普通+按下），由 GameApp 注入；留空则用 resources 默认 icon */
@@ -377,6 +403,7 @@ export class GameView extends Component {
             const sp = bg.getComponent(Sprite);
             if (sp) sp.sizeMode = Sprite.SizeMode.CUSTOM;
         }
+        this._layoutTopBarSafeInset();
         const headerBg = this._headerBgNode;
         if (headerBg?.isValid) {
             this._layoutHeaderBgNode(headerBg);
@@ -486,12 +513,9 @@ export class GameView extends Component {
             this._board?.resetLevelConnectCount();
             this.onLevelWin?.(connectCount);
         };
-        if (this._tileFaceCache && this._tileFaceCache.length > 0) {
-            this._board.setTileFaceSprites(this._tileFaceCache);
-        }
         this._board.setHiddenTileSprite(this._hiddenTileSpriteCache);
-        this._applyDeckToBoard();
-        this._wireBoardCallbacks();
+        // 贴图与卡组必须一起上，且用当前 cache（await 之后可能已被 GameApp 更新为 30 种）
+        this.applyTileFacesAndDeck(this._tileFaceCache, this._deckTypeIds);
 
         // 子节点顺序：GameRoot 下 GameBg(若有) → HeaderBg(若有) → BoardHolder → TopBar → BottomBar
 
@@ -508,7 +532,7 @@ export class GameView extends Component {
         topW.isAlignTop = true;
         topW.isAlignLeft = true;
         topW.isAlignRight = true;
-        topW.top = 0;
+        topW.top = getSafeAreaTopInset();
         topW.left = topW.right = 0;
         topW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
         topW.updateAlignment();
@@ -518,7 +542,7 @@ export class GameView extends Component {
         const ll = lvlN.addComponent(Label);
         ll.string = this._levelLabelText(this._level);
         ll.color = Color.WHITE;
-        ll.fontSize = 29;
+        ll.fontSize = 31;
         this._applyLabelOutline(ll);
         ll.horizontalAlign = Label.HorizontalAlign.CENTER;
         ll.verticalAlign = Label.VerticalAlign.CENTER;
@@ -605,9 +629,18 @@ export class GameView extends Component {
             if (this._board) this._runBuildLevel(this._board);
         }
 
-        if (this._gameBgNode) {
-            this.scheduleOnce(() => this.relayout(), 0);
+        this._uiReady = true;
+        const waiters = this._uiReadyWaiters.splice(0, this._uiReadyWaiters.length);
+        for (let i = 0; i < waiters.length; i++) {
+            try {
+                waiters[i]();
+            } catch (e) {
+                console.warn('[GameView] whenUiReady callback failed', e);
+            }
         }
+
+        // 次帧再排：微信端首帧 safeArea 偶发未就绪
+        this.scheduleOnce(() => this.relayout(), 0);
     }
 
     private _tryUseProp(kind: PropKind): boolean {
@@ -719,6 +752,17 @@ export class GameView extends Component {
         return String(Math.max(1, Math.floor(level)));
     }
 
+    /** 顶栏整体下移到刘海/状态栏下方，避免关卡数被遮挡 */
+    private _layoutTopBarSafeInset() {
+        const top = this._topBarNode;
+        if (!top?.isValid) return;
+        const topW = top.getComponent(Widget);
+        if (!topW) return;
+        topW.isAlignTop = true;
+        topW.top = getSafeAreaTopInset();
+        topW.updateAlignment();
+    }
+
     private _layoutLevelLabelNode(lvlN: Node) {
         const lvlW = lvlN.getComponent(Widget);
         lvlW?.updateAlignment();
@@ -746,7 +790,7 @@ export class GameView extends Component {
         hW.isAlignLeft = hW.isAlignRight = hW.isAlignBottom = false;
         hW.isAlignHorizontalCenter = true;
         hW.isAlignTop = true;
-        hW.top = 0;
+        hW.top = getSafeAreaTopInset();
         hW.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
         hW.updateAlignment();
         const hSp = headerBg.getComponent(Sprite);

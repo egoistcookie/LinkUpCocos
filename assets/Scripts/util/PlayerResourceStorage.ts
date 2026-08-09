@@ -158,18 +158,28 @@ function coerceShopKeyList(defaultKeys: unknown): string[] {
  */
 export function ensureDefaultShopOwnership(defaultKeys: unknown): string[] {
     const list = coerceShopKeyList(defaultKeys);
-    const existing = new Set(loadPurchasedShopKeys());
-    for (let i = 0; i < list.length; i++) existing.add(list[i]);
-    const merged = [...existing].sort();
-    if (list.length > 0 || merged.length > 0) {
-        savePurchasedShopKeys(merged);
+    const existing = loadPurchasedShopKeys();
+    const seen: Record<string, number> = Object.create(null);
+    const merged: string[] = [];
+    const push = (k: string) => {
+        if (!k || seen[k]) return;
+        seen[k] = 1;
+        merged.push(k);
+    };
+    for (let i = 0; i < list.length; i++) push(list[i]);
+    for (let i = 0; i < existing.length; i++) push(existing[i]);
+    merged.sort();
+    // 赠送列表解析成功时，合并结果不应短于赠送数（防止旧缓存/微信 Set 异常只剩 1 条）
+    const result = list.length > 0 && merged.length < list.length ? list.slice().sort() : merged;
+    if (result.length > 0) {
+        savePurchasedShopKeys(result);
         try {
             sys.localStorage.setItem(SHOP_DEFAULTS_KEY, SHOP_DEFAULTS_VER);
         } catch {
             /* 忽略 */
         }
     }
-    return merged.length > 0 ? merged : list.slice();
+    return result.length > 0 ? result : list.slice();
 }
 
 function defaultPropCounts(): PropCounts {

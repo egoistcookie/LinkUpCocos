@@ -238,18 +238,35 @@ export class LinkUpBoard extends Component {
         if (!typeIds || typeIds.length === 0) {
             this._recomputeActiveTypeIdsFromSprites();
         } else {
-            const allowed = new Set<number>();
+            // 勿用 Set + 展开：微信小游戏上 [...new Set(nums)] 曾出现只剩 1 个元素
+            const allowed: Record<number, number> = Object.create(null);
+            const allowedList: number[] = [];
             for (let i = 0; i < TILE_SPRITE_SLOTS; i++) {
-                if (this._tileFaceSprites[i] != null) allowed.add(i + 1);
+                if (this._tileFaceSprites[i] != null) {
+                    const id = i + 1;
+                    allowed[id] = 1;
+                    allowedList.push(id);
+                }
             }
-            const filtered = [...new Set(typeIds.map((n) => Number(n)).filter((id) => allowed.has(id)))].sort(
-                (a, b) => a - b,
-            );
+            const seen: Record<number, number> = Object.create(null);
+            const filtered: number[] = [];
+            for (let i = 0; i < typeIds.length; i++) {
+                const id = Number(typeIds[i]);
+                if (!Number.isFinite(id)) continue;
+                const nid = id | 0;
+                if (!allowed[nid] || seen[nid]) continue;
+                seen[nid] = 1;
+                filtered.push(nid);
+            }
+            filtered.sort((a, b) => a - b);
             if (filtered.length < MIN_DECK_TYPE_COUNT) {
-                linkWarn('LinkUpBoard.setDeckTypeIds', '类型数不足，已回退为全部已配置类型', {
-                    got: filtered.length,
-                    min: MIN_DECK_TYPE_COUNT,
-                });
+                if (allowedList.length >= MIN_DECK_TYPE_COUNT) {
+                    linkWarn('LinkUpBoard.setDeckTypeIds', '类型数不足，已回退为全部已配置类型', {
+                        got: filtered.length,
+                        sprites: allowedList.length,
+                        min: MIN_DECK_TYPE_COUNT,
+                    });
+                }
                 this._recomputeActiveTypeIdsFromSprites();
             } else {
                 this._activeTypeIds = filtered;
