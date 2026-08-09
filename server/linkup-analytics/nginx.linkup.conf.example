@@ -1,0 +1,35 @@
+# 片段：并入 www.egoistcookie.top 的 server {} 里即可
+# HTTPS 证书按你现有站点配置（certbot / 已有 ssl_certificate）
+
+# --- 方式 A：已有 server 块，只加 location ---
+# server {
+#     listen 443 ssl http2;
+#     server_name www.egoistcookie.top egoistcookie.top;
+#     # ... 原有 ssl / 其它 location ...
+#
+#     location /api/linkup/ {
+#         proxy_pass http://127.0.0.1:8765;
+#         proxy_http_version 1.1;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#         proxy_connect_timeout 5s;
+#         proxy_send_timeout 15s;
+#         proxy_read_timeout 15s;
+#         client_max_body_size 256k;
+#     }
+# }
+
+location /api/linkup/ {
+    proxy_pass http://127.0.0.1:8765;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 15s;
+    proxy_read_timeout 15s;
+    client_max_body_size 256k;
+}

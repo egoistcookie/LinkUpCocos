@@ -44,6 +44,7 @@ import {
     mkDialogPanelShell,
     refreshDialogPanelBackgroundSize,
 } from '../util/DialogPanelBg';
+import { trackDeckConfig } from '../util/AnalyticsTracker';
 
 type DeckGridItem = { key: string | number; sf: SpriteFrame };
 type DeckSection = { title: string; items: DeckGridItem[] };
@@ -342,10 +343,12 @@ export class DeckSelectDialog extends Component {
                     const keys = [...this._selectedShopKeys];
                     saveDeckShopKeys(keys);
                     const ids = deckShopKeysToTypeIds(keys, shopGroups);
+                    trackDeckConfig({ mode: 'shop_keys', count: keys.length, shopKeys: keys, typeIds: ids });
                     this._opts.onSaved?.(ids);
                 } else {
                     const ids = [...this._selectedIds].sort((a, b) => a - b);
                     saveDeckTypeIds(ids);
+                    trackDeckConfig({ mode: 'type_ids', count: ids.length, typeIds: ids });
                     this._opts.onSaved?.(ids);
                 }
                 this._close();

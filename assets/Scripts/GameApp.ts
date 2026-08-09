@@ -44,6 +44,7 @@ import {
     loadCurrentLevel,
     saveCurrentLevel,
 } from './util/PlayerResourceStorage';
+import { trackLevelEnd } from './util/AnalyticsTracker';
 import {
     buildShopCatalog,
     buildTileFacesFromDeckEntries,
@@ -521,6 +522,11 @@ export class GameApp extends Component {
     private _onGameBack() {
         this._game?.closeLevelClearOverlay();
         const pending = this._game?.takePendingConnectCoins() ?? 0;
+        trackLevelEnd('abort', {
+            connectCount: pending,
+            coinsEarned: pending,
+            reason: 'back_home',
+        });
         if (pending > 0) {
             addCoins(pending);
         }
@@ -538,6 +544,10 @@ export class GameApp extends Component {
     private _onLevelWin(connectCount: number) {
         const level = this._game?.getLevel() ?? 1;
         const nextLevel = level + 1;
+        trackLevelEnd('win', {
+            connectCount,
+            coinsEarned: connectCount,
+        });
         if (!this.testMode) {
             saveCurrentLevel(nextLevel);
         }

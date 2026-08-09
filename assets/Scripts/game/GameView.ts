@@ -22,6 +22,7 @@ import {
 import { getSafeAreaTopInset, getStableVisibleSize } from '../util/ViewSize';
 import { consumeProp, type PropKind } from '../util/PlayerResourceStorage';
 import { showFrameToast } from '../util/FrameToast';
+import { trackLevelStart, trackPropUse } from '../util/AnalyticsTracker';
 
 const { ccclass } = _decorator;
 
@@ -195,6 +196,10 @@ export class GameView extends Component {
     beginOrRestartLevel(level: number) {
         this._level = Math.max(1, Math.floor(level));
         if (this._levelLabel) this._levelLabel.string = this._levelLabelText(this._level);
+        trackLevelStart(this._level, {
+            deck_type_ids: this._deckTypeIds ? this._deckTypeIds.slice() : null,
+            test_mode: this._testMode,
+        });
         if (!this._board) {
             this._pendingStartLevel = this._level;
             return;
@@ -644,8 +649,14 @@ export class GameView extends Component {
     }
 
     private _tryUseProp(kind: PropKind): boolean {
-        if (!this._shopPropsEnabled || this._testMode) return true;
-        if (consumeProp(kind)) return true;
+        if (!this._shopPropsEnabled || this._testMode) {
+            trackPropUse(kind);
+            return true;
+        }
+        if (consumeProp(kind)) {
+            trackPropUse(kind);
+            return true;
+        }
         const names = { hint: '提示', refresh: '刷新', eliminate: '消除' };
         this._showGameToast(`无${names[kind]}道具，请前往商店购买（50 金币）`);
         return false;

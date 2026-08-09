@@ -19,6 +19,7 @@ import {
 import { DIALOG_ROW_POP_DURATION, RowRevealRunner } from '../util/DialogRowReveal';
 import { getLayoutSizeForNode } from '../util/ViewSize';
 import {
+    BLOCK_PRICE,
     isShopBlockOwned,
     loadCoins,
     loadPropCounts,
@@ -27,6 +28,7 @@ import {
     purchaseShopBlock,
     type PropKind,
 } from '../util/PlayerResourceStorage';
+import { trackBuyBlock, trackBuyProp } from '../util/AnalyticsTracker';
 import { SHOP_COLS_PER_ROW, type ShopCatalogGroup } from '../util/ShopCatalog';
 import { type DialogActionButtonSprites, mkDialogActionButton } from '../util/DialogActionButtons';
 import {
@@ -608,6 +610,7 @@ export class ShopDialog extends Component {
                 if (purchaseProp(p.kind)) {
                     sl.string = `拥有 ${loadPropCounts()[p.kind]}`;
                     this._notifyCoins();
+                    trackBuyProp(p.kind, PROP_PRICE, loadCoins());
                 } else {
                     this._showToast(`金币不足，需要 ${PROP_PRICE} 金币`);
                 }
@@ -712,6 +715,7 @@ export class ShopDialog extends Component {
                     this._mkOwnedBadge(cell, btnY);
                     this._notifyCoins();
                     this._showToast('购买成功');
+                    trackBuyBlock(item.shopKey, item.price ?? BLOCK_PRICE, loadCoins());
                 } else if (result === 'insufficient_coins') {
                     this._showToast(`金币不足，需要 ${item.price} 金币`);
                 } else if (result === 'already_owned') {
