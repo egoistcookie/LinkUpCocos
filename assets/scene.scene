@@ -471,6 +471,7 @@
     "sfxRefresh": null,
     "sfxEliminate": null,
     "sfxLevelClear": null,
+    "sfxTarotFlip": null,
     "bgm": {
       "__uuid__": "8c38482c-84fb-4a02-9e63-614a92bb364b",
       "__expectedType__": "cc.AudioClip"
@@ -575,8 +576,8 @@
     },
     "hiddenTileSprite": null,
     "sfxHiddenFlip": null,
-    "testMode": false,
-    "testLevel": 8,
+    "testMode": true,
+    "testLevel": 1,
     "shopLandAnimalSprites": [
       {
         "__uuid__": "11f9f785-c99c-4c0a-b081-d7a3227069fd@f9941",

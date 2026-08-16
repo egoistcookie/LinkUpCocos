@@ -19,6 +19,7 @@ import {
     openLevelClearOverlay,
     type LevelClearDialogConfig,
 } from './LevelClearOverlay';
+import { openTarotDrawOverlay } from './TarotDrawOverlay';
 import { getSafeAreaTopInset, getStableVisibleSize } from '../util/ViewSize';
 import { consumeProp, type PropKind } from '../util/PlayerResourceStorage';
 import { showFrameToast } from '../util/FrameToast';
@@ -158,6 +159,7 @@ export class GameView extends Component {
     private _noConnectTimerGen = 0;
     private _levelClearCfg: LevelClearDialogConfig | null = null;
     private _levelClearCloser: (() => void) | null = null;
+    private _tarotDrawCloser: (() => void) | null = null;
 
     /** GameApp 注入的卡组类型子集（≥30）；无贴图模式时为 null */
     private _deckTypeIds: number[] | null = null;
@@ -349,11 +351,15 @@ export class GameView extends Component {
     }
 
     closeLevelClearOverlay() {
+        this._tarotDrawCloser?.();
+        this._tarotDrawCloser = null;
         this._levelClearCloser?.();
         this._levelClearCloser = null;
     }
 
-    /** 通关结算：上半屏循环动画 + 居中弹窗；点击按钮后关闭并回调 */
+    /**
+     * 通关流程：先抽卡特效，翻开一张后进入结算弹窗。
+     */
     openLevelClearOverlay(
         level: number,
         coinAmount: number,
@@ -361,20 +367,37 @@ export class GameView extends Component {
         onNext: () => void,
     ) {
         this.closeLevelClearOverlay();
-        const passSfx = this._levelClearPassSfx;
-        if (passSfx) this._playSfx(passSfx);
-        this._levelClearCloser = openLevelClearOverlay(
+        this._tarotDrawCloser = openTarotDrawOverlay(
             this.node,
-            this._levelClearCfg,
-            { level, coinAmount, onHome, onNext },
             this,
+            () => {
+                this._tarotDrawCloser = null;
+                const passSfx = this._levelClearPassSfx;
+                if (passSfx) this._playSfx(passSfx);
+                this._levelClearCloser = openLevelClearOverlay(
+                    this.node,
+                    this._levelClearCfg,
+                    { level, coinAmount, onHome, onNext },
+                    this,
+                );
+            },
+            {
+                flipSfx: this._tarotFlipSfx,
+                playSfx: (clip) => this._playSfx(clip),
+            },
         );
     }
 
     private _levelClearPassSfx: AudioClip | null = null;
+    private _tarotFlipSfx: AudioClip | null = null;
 
     setLevelClearPassSfx(clip: AudioClip | null) {
         this._levelClearPassSfx = clip;
+    }
+
+    /** 塔罗翻开音效；不配置则 overlay 会尝试加载 sounds/升星 */
+    setTarotFlipSfx(clip: AudioClip | null) {
+        this._tarotFlipSfx = clip;
     }
 
     private _applyLabelOutline(lab: Label) {

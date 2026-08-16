@@ -109,6 +109,8 @@ export class GameApp extends Component {
     sfxEliminate: AudioClip | null = null;
     @property({ type: AudioClip, tooltip: '通关结算弹窗出现时播放；不配置则不播放' })
     sfxLevelClear: AudioClip | null = null;
+    @property({ type: AudioClip, tooltip: '通关抽卡翻开塔罗牌时播放；不配置则自动加载 sounds/升星' })
+    sfxTarotFlip: AudioClip | null = null;
     @property({ type: AudioClip, tooltip: '游戏启动后循环播放的背景音乐；不配置则不播放' })
     bgm: AudioClip | null = null;
 
@@ -437,6 +439,7 @@ export class GameApp extends Component {
         };
         this._game.setLevelClearDialog(cfg);
         this._game.setLevelClearPassSfx(this.sfxLevelClear);
+        this._game.setTarotFlipSfx(this.sfxTarotFlip);
     }
 
     private _getDialogActionButtons(): DialogActionButtonSprites {
