@@ -64,6 +64,20 @@ export function makeShopKey(groupKey: ShopSpriteGroupKey, indexInGroup: number):
     return `${groupKey}:${indexInGroup}`;
 }
 
+/** 史诗方块在卡组中的 shopKey，如 epic:小瓦1 */
+export function makeEpicShopKey(cubeId: string): string {
+    return `epic:${String(cubeId ?? '').trim()}`;
+}
+
+export function isEpicShopKey(shopKey: string): boolean {
+    return String(shopKey ?? '').startsWith('epic:');
+}
+
+export function parseEpicCubeId(shopKey: string): string {
+    const k = String(shopKey ?? '');
+    return isEpicShopKey(k) ? k.slice('epic:'.length) : '';
+}
+
 function groupItems(title: string, groupKey: ShopSpriteGroupKey, sprites: SpriteFrame[]): ShopCatalogGroup {
     const items: ShopCatalogItem[] = [];
     const list = sprites ?? [];
@@ -185,15 +199,23 @@ export function buildTileFacesFromDeckEntries(
 export function buildTileFacesFromDeckKeys(
     groups: ShopCatalogGroup[],
     deckShopKeys: string[],
+    epicSprites?: Record<string, SpriteFrame> | null,
 ): Array<SpriteFrame | null> {
     const faces: Array<SpriteFrame | null> = [];
     for (let i = 0; i < TILE_SPRITE_SLOTS; i++) faces.push(null);
     let slot = 0;
     for (const key of deckShopKeys) {
         if (slot >= TILE_SPRITE_SLOTS) break;
-        const it = findCatalogItem(groups, key);
+        const k = String(key ?? '');
+        const it = findCatalogItem(groups, k);
         if (it) {
             faces[slot] = it.sprite;
+            slot++;
+            continue;
+        }
+        const epicSf = epicSprites?.[k];
+        if (epicSf) {
+            faces[slot] = epicSf;
             slot++;
         }
     }
@@ -201,12 +223,17 @@ export function buildTileFacesFromDeckKeys(
 }
 
 /** 卡组 shopKey 顺序 → 对局 typeId 列表（1…n） */
-export function deckShopKeysToTypeIds(deckShopKeys: string[], groups: ShopCatalogGroup[]): number[] {
+export function deckShopKeysToTypeIds(
+    deckShopKeys: string[],
+    groups: ShopCatalogGroup[],
+    epicSprites?: Record<string, SpriteFrame> | null,
+): number[] {
     const ids: number[] = [];
     let slot = 0;
     for (const key of deckShopKeys) {
         if (slot >= TILE_SPRITE_SLOTS) break;
-        if (findCatalogItem(groups, key)) {
+        const k = String(key ?? '');
+        if (findCatalogItem(groups, k) || epicSprites?.[k]) {
             ids.push(slot + 1);
             slot++;
         }

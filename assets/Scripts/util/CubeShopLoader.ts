@@ -153,3 +153,83 @@ export function pickRicherSpriteList(
     const b = fromBundle ?? [];
     return b.length > e.length ? b : e;
 }
+
+/**
+ * 按资源名从 cube 分包加载单张贴图（如史诗方块「小瓦1」）。
+ * 路径不含扩展名，与 bundle 内文件名一致。
+ */
+export function loadCubeSpriteByName(
+    assetName: string,
+    done: (sf: SpriteFrame | null) => void,
+): void {
+    const name = String(assetName ?? '').trim().replace(/\\/g, '/');
+    const base = assetBaseName(name);
+    if (!base) {
+        done(null);
+        return;
+    }
+
+    const finish = (sf: SpriteFrame | null) => done(sf);
+
+    const tryLoadFromBundle = (bundle: AssetManager.Bundle) => {
+        const candidates = [`${base}/spriteFrame`, base];
+        const infos = bundle.getDirWithPath('', SpriteFrame) ?? [];
+        for (let i = 0; i < infos.length; i++) {
+            const p = infos[i]?.path ?? '';
+            if (assetBaseName(p) === base && candidates.indexOf(p) < 0) {
+                candidates.push(p);
+            }
+        }
+
+        const tryAt = (idx: number) => {
+            if (idx >= candidates.length) {
+                finish(null);
+                return;
+            }
+            bundle.load(candidates[idx], SpriteFrame, (err, sf) => {
+                if (!err && sf) {
+                    finish(sf);
+                    return;
+                }
+                tryAt(idx + 1);
+            });
+        };
+        tryAt(0);
+    };
+
+    const existing = assetManager.getBundle(BUNDLE_NAME);
+    if (existing) {
+        tryLoadFromBundle(existing);
+        return;
+    }
+    assetManager.loadBundle(BUNDLE_NAME, (err, bundle) => {
+        if (err || !bundle) {
+            linkWarn('CubeShopLoader.loadCubeSpriteByName', err || 'no bundle', base);
+            finish(null);
+            return;
+        }
+        tryLoadFromBundle(bundle);
+    });
+}
+
+/** 批量按名加载 cube 贴图；顺序与 ids 一致，失败项为 null */
+export function loadCubeSpritesByNames(
+    ids: string[],
+    done: (frames: Array<SpriteFrame | null>) => void,
+): void {
+    const list = (ids ?? []).map((x) => String(x ?? '').trim()).filter(Boolean);
+    if (list.length === 0) {
+        done([]);
+        return;
+    }
+    const out: Array<SpriteFrame | null> = new Array(list.length).fill(null);
+    let pending = list.length;
+    for (let i = 0; i < list.length; i++) {
+        const idx = i;
+        loadCubeSpriteByName(list[idx], (sf) => {
+            out[idx] = sf;
+            pending -= 1;
+            if (pending <= 0) done(out);
+        });
+    }
+}

@@ -30,7 +30,7 @@ import {
     saveDeckShopKeys,
     saveDeckTypeIds,
 } from '../util/DeckSelectionStorage';
-import { deckShopKeysToTypeIds, type ShopCatalogGroup } from '../util/ShopCatalog';
+import { deckShopKeysToTypeIds, makeEpicShopKey, type ShopCatalogGroup } from '../util/ShopCatalog';
 import {
     type DialogActionButtonResult,
     type DialogActionButtonSprites,
@@ -46,8 +46,10 @@ import {
 } from '../util/DialogPanelBg';
 import { trackDeckConfig } from '../util/AnalyticsTracker';
 
-type DeckGridItem = { key: string | number; sf: SpriteFrame };
-type DeckSection = { title: string; items: DeckGridItem[] };
+type DeckGridItem = { key: string | number; sf: SpriteFrame; selectable?: boolean };
+type DeckSection = { title: string; items: DeckGridItem[]; selectable?: boolean };
+
+export type EpicDeckItem = { id: string; sprite: SpriteFrame };
 
 /** 配置卡组背景贴图在底板高度上额外向下拉伸的像素 */
 const DECK_BG_TEXTURE_STRETCH_H = 80;
@@ -89,6 +91,8 @@ export class DeckSelectDialog extends Component {
             shopEnabled?: boolean;
             shopGroups?: ShopCatalogGroup[];
             deckEntries?: DeckEntry[];
+            /** 通关获得的史诗方块，展示在卡组最上方 */
+            epicItems?: EpicDeckItem[];
             onSaved?: (ids: number[]) => void;
             onClose?: () => void;
         },
@@ -116,6 +120,7 @@ export class DeckSelectDialog extends Component {
         shopEnabled: boolean;
         shopGroups?: ShopCatalogGroup[];
         deckEntries?: DeckEntry[];
+        epicItems?: EpicDeckItem[];
         onSaved?: (ids: number[]) => void;
         onClose?: () => void;
     };
@@ -142,6 +147,7 @@ export class DeckSelectDialog extends Component {
             shopEnabled?: boolean;
             shopGroups?: ShopCatalogGroup[];
             deckEntries?: DeckEntry[];
+            epicItems?: EpicDeckItem[];
             onSaved?: (ids: number[]) => void;
             onClose?: () => void;
         },
@@ -152,6 +158,7 @@ export class DeckSelectDialog extends Component {
             ...opts,
             shopEnabled: !!opts.shopEnabled,
             actionButtons: opts.actionButtons ?? null,
+            epicItems: opts.epicItems ?? [],
         };
         this._build(pw, ph);
     }
@@ -185,7 +192,9 @@ export class DeckSelectDialog extends Component {
         const deckEntries = this._opts.deckEntries ?? [];
         const shopGroups = this._opts.shopGroups ?? [];
 
-        const availableCount = shopOn ? deckEntries.length : getDeckSelectableTypeIds(faces, false).length;
+        const availableCount = shopOn
+            ? deckEntries.length + (this._opts.epicItems?.length ?? 0)
+            : getDeckSelectableTypeIds(faces, false).length;
 
         if (availableCount < MIN_DECK_TYPE_COUNT) {
             const panelW = getDialogPanelWidthFromParent(this.node);
@@ -199,7 +208,7 @@ export class DeckSelectDialog extends Component {
             tip.setPosition(0, 20, 0);
             const tl = tip.addComponent(Label);
             tl.string = shopOn
-                ? `请先在「商店」获得至少 ${MIN_DECK_TYPE_COUNT} 种方块。当前已拥有 ${deckEntries.length} 种。`
+                ? `请先在「商店」获得至少 ${MIN_DECK_TYPE_COUNT} 种方块。当前已拥有 ${availableCount} 种。`
                 : `当前在 GameApp 中已配置的方块贴图不足 ${MIN_DECK_TYPE_COUNT} 种，请至少配置 ${MIN_DECK_TYPE_COUNT} 个格子贴图后再配置卡组。`;
             tl.fontSize = 22;
             tl.color = Color.WHITE;
@@ -220,13 +229,18 @@ export class DeckSelectDialog extends Component {
         }
 
         if (shopOn) {
-            const entryKeys = deckEntries.map((e) => String(e.shopKey));
+            const epicItems = this._opts.epicItems ?? [];
+            const epicKeys = epicItems.map((e) => makeEpicShopKey(e.id));
+            const entryKeys = [
+                ...deckEntries.map((e) => String(e.shopKey)),
+                ...epicKeys,
+            ];
             const initialKeys = loadDeckShopKeysRaw(shopGroups, entryKeys);
             for (let i = 0; i < initialKeys.length; i++) {
                 const k = String(initialKeys[i]);
                 if (entryKeys.indexOf(k) >= 0) this._selectedShopKeys.add(k);
             }
-            // 默认选中前 30 种（列表顺序 = 赠送顺序）
+            // 默认选中前 30 种（列表顺序 = 赠送顺序；史诗排在后面不默认勾）
             if (this._selectedShopKeys.size < MIN_DECK_TYPE_COUNT) {
                 for (let i = 0; i < entryKeys.length && this._selectedShopKeys.size < MIN_DECK_TYPE_COUNT; i++) {
                     this._selectedShopKeys.add(entryKeys[i]);
@@ -256,6 +270,16 @@ export class DeckSelectDialog extends Component {
               }));
 
         const sections = this._buildDeckSections(shopOn, shopGroups, gridItems, faces);
+        const epicItems = this._opts.epicItems ?? [];
+        if (epicItems.length > 0) {
+            sections.unshift({
+                title: '史诗方块',
+                items: epicItems.map((e) => ({
+                    key: makeEpicShopKey(e.id),
+                    sf: e.sprite,
+                })),
+            });
+        }
 
         const panelW = getDialogPanelWidthFromParent(this.node);
         const maxOuterH = Math.min(ph - 48, 920);
@@ -342,7 +366,13 @@ export class DeckSelectDialog extends Component {
                 if (shopOn && shopGroups.length > 0) {
                     const keys = [...this._selectedShopKeys];
                     saveDeckShopKeys(keys);
-                    const ids = deckShopKeysToTypeIds(keys, shopGroups);
+                    const epicSprites: Record<string, SpriteFrame> = Object.create(null);
+                    const epics = this._opts.epicItems ?? [];
+                    for (let i = 0; i < epics.length; i++) {
+                        const e = epics[i];
+                        epicSprites[makeEpicShopKey(e.id)] = e.sprite;
+                    }
+                    const ids = deckShopKeysToTypeIds(keys, shopGroups, epicSprites);
                     trackDeckConfig({ mode: 'shop_keys', count: keys.length, shopKeys: keys, typeIds: ids });
                     this._opts.onSaved?.(ids);
                 } else {
@@ -553,8 +583,13 @@ export class DeckSelectDialog extends Component {
         border.addComponent(UITransform).setContentSize(CELL_FACE, CELL_FACE);
         const g = border.addComponent(Graphics);
 
-        const isSelected = () =>
-            shopOn ? this._selectedShopKeys.has(String(item.key)) : this._selectedIds.has(Number(item.key));
+        const selectable = item.selectable !== false;
+        const isSelected = () => {
+            if (!selectable) return true;
+            return shopOn
+                ? this._selectedShopKeys.has(String(item.key))
+                : this._selectedIds.has(Number(item.key));
+        };
 
         const drawSel = (on: boolean) => {
             const half = CELL_FACE / 2;
@@ -587,6 +622,8 @@ export class DeckSelectDialog extends Component {
             }
         };
         drawSel(isSelected());
+
+        if (!selectable) return;
 
         cellRoot.addComponent(Button);
         cellRoot.on(Button.EventType.CLICK, () => {

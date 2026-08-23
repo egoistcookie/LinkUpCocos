@@ -20,8 +20,9 @@ import {
     type LevelClearDialogConfig,
 } from './LevelClearOverlay';
 import { openTarotDrawOverlay } from './TarotDrawOverlay';
+import { openEpicCubeRewardOverlay } from './EpicCubeRewardOverlay';
 import { getSafeAreaTopInset, getStableVisibleSize } from '../util/ViewSize';
-import { consumeProp, type PropKind } from '../util/PlayerResourceStorage';
+import { addEpicCube, consumeProp, type PropKind } from '../util/PlayerResourceStorage';
 import { showFrameToast } from '../util/FrameToast';
 import { trackLevelStart, trackPropUse } from '../util/AnalyticsTracker';
 
@@ -160,6 +161,7 @@ export class GameView extends Component {
     private _levelClearCfg: LevelClearDialogConfig | null = null;
     private _levelClearCloser: (() => void) | null = null;
     private _tarotDrawCloser: (() => void) | null = null;
+    private _epicCubeRewardCloser: (() => void) | null = null;
 
     /** GameApp 注入的卡组类型子集（≥30）；无贴图模式时为 null */
     private _deckTypeIds: number[] | null = null;
@@ -353,12 +355,14 @@ export class GameView extends Component {
     closeLevelClearOverlay() {
         this._tarotDrawCloser?.();
         this._tarotDrawCloser = null;
+        this._epicCubeRewardCloser?.();
+        this._epicCubeRewardCloser = null;
         this._levelClearCloser?.();
         this._levelClearCloser = null;
     }
 
     /**
-     * 通关流程：先抽卡特效，翻开一张后进入结算弹窗。
+     * 通关流程：抽卡特效 → 史诗方块奖励页 → 结算弹窗。
      */
     openLevelClearOverlay(
         level: number,
@@ -367,18 +371,36 @@ export class GameView extends Component {
         onNext: () => void,
     ) {
         this.closeLevelClearOverlay();
+        const openSettle = () => {
+            const passSfx = this._levelClearPassSfx;
+            if (passSfx) this._playSfx(passSfx);
+            this._levelClearCloser = openLevelClearOverlay(
+                this.node,
+                this._levelClearCfg,
+                { level, coinAmount, onHome, onNext },
+                this,
+            );
+        };
         this._tarotDrawCloser = openTarotDrawOverlay(
             this.node,
             this,
-            () => {
+            (result) => {
                 this._tarotDrawCloser = null;
-                const passSfx = this._levelClearPassSfx;
-                if (passSfx) this._playSfx(passSfx);
-                this._levelClearCloser = openLevelClearOverlay(
+                const cubeId = String(result?.cubeId ?? '').trim();
+                // 塔罗候选已抽尽时跳过史诗奖励页，直接结算
+                if (!cubeId) {
+                    openSettle();
+                    return;
+                }
+                addEpicCube(cubeId);
+                this._epicCubeRewardCloser = openEpicCubeRewardOverlay(
                     this.node,
-                    this._levelClearCfg,
-                    { level, coinAmount, onHome, onNext },
                     this,
+                    cubeId,
+                    () => {
+                        this._epicCubeRewardCloser = null;
+                        openSettle();
+                    },
                 );
             },
             {

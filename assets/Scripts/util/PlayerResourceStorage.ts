@@ -4,6 +4,8 @@ const COINS_KEY = 'linkup_v1_coins';
 const CURRENT_LEVEL_KEY = 'linkup_v1_current_level';
 const PURCHASED_SHOP_KEYS = 'linkup_v1_purchased_shop_keys';
 const PROPS_KEY = 'linkup_v1_props';
+/** 通关翻牌获得的史诗方块 id（对应 cube 包内资源名，如 小瓦1） */
+const EPIC_CUBES_KEY = 'linkup_v1_epic_cubes';
 /** 赠送方案版本；变更后会再次合并补全默认方块 */
 const SHOP_DEFAULTS_KEY = 'linkup_v1_shop_defaults_ver';
 const SHOP_DEFAULTS_VER = 'gift35-v1';
@@ -254,5 +256,62 @@ export function consumeProp(kind: PropKind): boolean {
     if (counts[kind] <= 0) return false;
     counts[kind] -= 1;
     writeJson(PROPS_KEY, counts);
+    return true;
+}
+
+type EpicCacheHost = { __linkupEpicCubeIds?: string[] | null };
+const _epicHost = globalThis as unknown as EpicCacheHost;
+
+function normalizeEpicCubeIds(raw: unknown): string[] {
+    let arr: unknown[] = [];
+    if (Array.isArray(raw)) {
+        arr = raw;
+    } else if (raw && typeof raw === 'object') {
+        arr = Object.values(raw as Record<string, unknown>);
+    } else {
+        return [];
+    }
+    return [
+        ...new Set(
+            arr
+                .map((x) => String(x ?? '').trim())
+                .filter((s) => s.length > 0 && !s.includes(':')),
+        ),
+    ];
+}
+
+function saveEpicCubeIds(ids: string[]): void {
+    const normalized = normalizeEpicCubeIds(ids);
+    _epicHost.__linkupEpicCubeIds = normalized;
+    writeJson(EPIC_CUBES_KEY, normalized);
+}
+
+/** 已获得的史诗方块资源名列表（如「小瓦1」） */
+export function loadEpicCubeIds(): string[] {
+    if (_epicHost.__linkupEpicCubeIds != null) {
+        return _epicHost.__linkupEpicCubeIds.slice();
+    }
+    const loaded = normalizeEpicCubeIds(readJson<unknown>(EPIC_CUBES_KEY, []));
+    _epicHost.__linkupEpicCubeIds = loaded;
+    return loaded.slice();
+}
+
+export function hasEpicCube(cubeId: string): boolean {
+    const id = String(cubeId ?? '').trim();
+    if (!id) return false;
+    return loadEpicCubeIds().indexOf(id) >= 0;
+}
+
+/**
+ * 通关翻牌后写入史诗方块；已拥有则返回 false。
+ * @returns 是否为新获得
+ */
+export function addEpicCube(cubeId: string): boolean {
+    const id = String(cubeId ?? '').trim();
+    if (!id || id.includes(':')) return false;
+    const list = loadEpicCubeIds();
+    if (list.indexOf(id) >= 0) return false;
+    list.push(id);
+    saveEpicCubeIds(list);
     return true;
 }

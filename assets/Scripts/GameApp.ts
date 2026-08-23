@@ -15,7 +15,7 @@ import {
     Widget,
     view,
 } from 'cc';
-import { loadCubeShopSpriteGroups, pickRicherSpriteList, type CubeShopSpriteGroups } from './util/CubeShopLoader';
+import { loadCubeShopSpriteGroups, loadCubeSpritesByNames, pickRicherSpriteList, type CubeShopSpriteGroups } from './util/CubeShopLoader';
 import {
     GameView,
     type GameSfxConfig,
@@ -24,7 +24,7 @@ import {
 } from './game/GameView';
 import type { LevelClearDialogConfig } from './game/LevelClearOverlay';
 import { HomeView, type HomeMainButtonSprites } from './game/HomeView';
-import { DeckSelectDialog } from './game/DeckSelectDialog';
+import { DeckSelectDialog, type EpicDeckItem } from './game/DeckSelectDialog';
 import { ShopDialog } from './game/ShopDialog';
 import { TILE_SPRITE_SLOTS } from './game/LinkUpBoard';
 import {
@@ -36,6 +36,7 @@ import {
     MAX_DECK_TYPE_COUNT,
     MIN_DECK_TYPE_COUNT,
     saveDeckShopKeys,
+    type DeckEntry,
 } from './util/DeckSelectionStorage';
 import {
     addCoins,
@@ -43,6 +44,7 @@ import {
     ensureDefaultShopOwnership,
     loadCoins,
     loadCurrentLevel,
+    loadEpicCubeIds,
     saveCurrentLevel,
 } from './util/PlayerResourceStorage';
 import { trackLevelEnd } from './util/AnalyticsTracker';
@@ -53,6 +55,7 @@ import {
     getDefaultOwnedEntries,
     getDefaultOwnedShopKeys,
     hasShopCatalog,
+    makeEpicShopKey,
     type ShopCatalogGroup,
 } from './util/ShopCatalog';
 import { type DialogActionButtonSprites } from './util/DialogActionButtons';
@@ -187,7 +190,10 @@ export class GameApp extends Component {
     @property({ tooltip: '测试模式：开启后提示/刷新/消除道具不扣次数，可无限使用' })
     testMode = false;
 
-    @property({ tooltip: '测试模式开启时，开始游戏从此关卡进入；通关后仍按 +1 进入下一关' })
+    @property({
+        tooltip:
+            '测试模式起始关卡：>0 时从此关进入且不写入存档进度；=0 时按正常通关进度往下走，仅保留道具无限',
+    })
     testLevel = 1;
 
     @property({ type: [SpriteFrame], tooltip: '商店陆地动物方块贴图列表（配置多少种展示多少种，每种 10 金币）' })
@@ -216,6 +222,8 @@ export class GameApp extends Component {
     private _cubeShopSprites: CubeShopSpriteGroups | null = null;
     private _cubeShopLoading = false;
     private _cubeShopWaiters: Array<() => void> = [];
+    /** 已获得史诗方块（含贴图），可入选卡组 */
+    private _epicDeckEntries: DeckEntry[] = [];
     /** 防止连点卡组/商店时在主线程重复构建弹窗 */
     private _homeDialogOpening = false;
     private _bgmSource: AudioSource | null = null;
@@ -354,25 +362,72 @@ export class GameApp extends Component {
 
     /** 确保 cube 分包已加载；编辑器预览若无 bundle 也会走回调（用序列化贴图） */
     private _withCubeShopReady(done: () => void) {
+        const afterEpic = () => {
+            try {
+                done();
+            } catch (e) {
+                linkWarn('GameApp._withCubeShopReady', 'callback failed', e);
+            }
+        };
         if (this._cubeShopSprites) {
-            done();
+            this._refreshEpicDeckEntries(afterEpic);
             return;
         }
-        this._cubeShopWaiters.push(done);
+        this._cubeShopWaiters.push(afterEpic);
         if (this._cubeShopLoading) return;
         this._cubeShopLoading = true;
         loadCubeShopSpriteGroups((groups) => {
             this._cubeShopSprites = groups;
             this._cubeShopLoading = false;
             const waiters = this._cubeShopWaiters.splice(0, this._cubeShopWaiters.length);
-            for (const cb of waiters) {
-                try {
-                    cb();
-                } catch (e) {
-                    linkWarn('GameApp._withCubeShopReady', 'callback failed', e);
+            this._refreshEpicDeckEntries(() => {
+                for (const cb of waiters) {
+                    try {
+                        cb();
+                    } catch (e) {
+                        linkWarn('GameApp._withCubeShopReady', 'callback failed', e);
+                    }
                 }
-            }
+            });
         });
+    }
+
+    /** 从本地史诗列表加载贴图缓存，供卡组勾选与开局使用 */
+    private _refreshEpicDeckEntries(done: () => void) {
+        const ids = loadEpicCubeIds();
+        if (ids.length === 0) {
+            this._epicDeckEntries = [];
+            done();
+            return;
+        }
+        loadCubeSpritesByNames(ids, (frames) => {
+            if (!this.isValid) {
+                done();
+                return;
+            }
+            const out: DeckEntry[] = [];
+            for (let i = 0; i < ids.length; i++) {
+                const sf = frames[i];
+                if (!sf) continue;
+                out.push({ shopKey: makeEpicShopKey(ids[i]), sprite: sf });
+            }
+            this._epicDeckEntries = out;
+            done();
+        });
+    }
+
+    private _mergeDeckEntriesWithEpic(base: DeckEntry[]): DeckEntry[] {
+        const out = base.slice();
+        const seen: Record<string, number> = Object.create(null);
+        for (let i = 0; i < out.length; i++) seen[String(out[i].shopKey)] = 1;
+        for (let i = 0; i < this._epicDeckEntries.length; i++) {
+            const e = this._epicDeckEntries[i];
+            const k = String(e.shopKey);
+            if (seen[k]) continue;
+            seen[k] = 1;
+            out.push(e);
+        }
+        return out;
     }
 
     private _rebuildShopCatalog() {
@@ -396,7 +451,7 @@ export class GameApp extends Component {
             const giftEntries = getDefaultOwnedEntries(this._shopGroups);
             const giftKeys = giftEntries.map((e) => e.shopKey);
             const ownedKeys = ensureDefaultShopOwnership(giftKeys);
-            const deckEntries = collectDeckEntriesForUi(this._shopGroups);
+            const deckEntries = this._mergeDeckEntriesWithEpic(collectDeckEntriesForUi(this._shopGroups));
             ensureDefaultDeckSelection(
                 this._shopGroups,
                 deckEntries.map((e) => e.shopKey),
@@ -407,6 +462,7 @@ export class GameApp extends Component {
                 giftKeys: giftKeys.length,
                 ownedKeys: ownedKeys.length,
                 deckEntries: deckEntries.length,
+                epicEntries: this._epicDeckEntries.length,
                 sampleGift: giftKeys.slice(0, 3),
                 sampleEntryKey: deckEntries.slice(0, 3).map((e) => e.shopKey),
                 fromCubeBundle: !!bundle,
@@ -454,11 +510,11 @@ export class GameApp extends Component {
     }
 
     /**
-     * 从商店赠送/已购条目挑出开局卡组（≥30），直接带 sprite，避免反查目录失败只剩 1 张贴图。
+     * 从商店赠送/已购/史诗条目挑出开局卡组（≥30），直接带 sprite，避免反查目录失败只剩 1 张贴图。
      */
     private _pickShopDeckEntries(): Array<{ shopKey: string; sprite: SpriteFrame }> | null {
         if (!this._shopEnabled) return null;
-        const deckEntries = collectDeckEntriesForUi(this._shopGroups);
+        const deckEntries = this._mergeDeckEntriesWithEpic(collectDeckEntriesForUi(this._shopGroups));
         if (deckEntries.length < MIN_DECK_TYPE_COUNT) return null;
         const ownedKeys = deckEntries.map((e) => e.shopKey);
         ensureDefaultDeckSelection(this._shopGroups, ownedKeys);
@@ -540,8 +596,13 @@ export class GameApp extends Component {
         this._enterHome();
     }
 
+    /** 测试模式且指定了起始关（>0）：跳关调试；=0 则走正常进度 */
+    private _hasTestLevelOverride(): boolean {
+        return this.testMode && Math.floor(this.testLevel) > 0;
+    }
+
     private _resolveStartLevel(): number {
-        if (this.testMode) {
+        if (this._hasTestLevelOverride()) {
             return Math.max(1, Math.floor(this.testLevel));
         }
         return loadCurrentLevel();
@@ -555,7 +616,8 @@ export class GameApp extends Component {
             connectCount,
             coinsEarned: connectCount,
         });
-        if (!this.testMode) {
+        // 指定测试关时不改存档；TestLevel=0 时与正常模式一样推进进度
+        if (!this._hasTestLevelOverride()) {
             saveCurrentLevel(nextLevel);
         }
         if (connectCount > 0) {
@@ -667,13 +729,16 @@ export class GameApp extends Component {
             if (!hr.isValid || hr.getChildByName('DeckSelectModal')) return;
             this._rebuildShopCatalog();
             const deckEntries = collectDeckEntriesForUi(this._shopGroups);
-            ensureDefaultDeckSelection(
-                this._shopGroups,
-                deckEntries.map((e) => e.shopKey),
-            );
+            const ownedKeys = this._mergeDeckEntriesWithEpic(deckEntries).map((e) => e.shopKey);
+            ensureDefaultDeckSelection(this._shopGroups, ownedKeys);
+            const epicItems: EpicDeckItem[] = this._epicDeckEntries.map((e) => ({
+                id: e.shopKey.startsWith('epic:') ? e.shopKey.slice(5) : e.shopKey,
+                sprite: e.sprite,
+            }));
             linkLog('GameApp._openDeckDialog', {
                 shopEnabled: this._shopEnabled,
                 deckEntries: deckEntries.length,
+                epicItems: epicItems.length,
                 sample: deckEntries.slice(0, 3).map((e) => e.shopKey),
             });
             DeckSelectDialog.open(hr, {
@@ -683,6 +748,7 @@ export class GameApp extends Component {
                 shopEnabled: this._shopEnabled,
                 shopGroups: this._shopGroups.length > 0 ? this._shopGroups : undefined,
                 deckEntries: this._shopEnabled ? deckEntries : undefined,
+                epicItems,
                 onSaved: (ids) => {
                     if (this._shopEnabled) {
                         this._game?.applyTileFacesAndDeck(this._getTileFacesForGame(), ids);

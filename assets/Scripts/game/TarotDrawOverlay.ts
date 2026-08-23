@@ -24,6 +24,9 @@ import {
     resources,
     tween,
 } from 'cc';
+import { loadTarotDrawPool, tarotFacePathToCubeId, type TarotCardDef } from '../util/TarotPool';
+
+export { tarotFacePathToCubeId } from '../util/TarotPool';
 
 const C_DIM = new Color(0, 0, 0, 180);
 const C_HINT = new Color(0xe9, 0xc4, 0x6a, 255);
@@ -32,10 +35,16 @@ const C_CARD_FALLBACK = new Color(0x2b, 0x1d, 0x3a, 255);
 
 /** resources/talo 下贴图基路径（无扩展名） */
 const TALO_BACK = 'talo/塔罗牌-背面';
-const TALO_FACE = 'talo/塔罗牌-小瓦1';
 /** assets/sounds/升星.mp3（resources 副本优先） */
 const TALO_FLIP_SFX_RES = 'sound/升星';
 const TALO_FLIP_SFX_UUID = 'ee7deb7e-543e-4ed7-98a4-c3353fda72dc';
+
+export type TarotDrawResult = {
+    /** cube 包内资源名，如「小瓦」；无牌可抽时为空 */
+    cubeId: string;
+    /** resources 下塔罗正面对应路径 */
+    taloFacePath: string;
+};
 
 /** 两张牌合计占屏宽比例 */
 const CARDS_TOTAL_WIDTH_RATIO = 0.8;
@@ -134,6 +143,8 @@ type CardRefs = {
     face: Node;
     sprite: Sprite;
     button: Button;
+    def: TarotCardDef | null;
+    faceSf: SpriteFrame | null;
 };
 
 export type TarotDrawOverlayOptions = {
@@ -144,13 +155,14 @@ export type TarotDrawOverlayOptions = {
 };
 
 /**
- * 通关结算前抽卡特效：左右两张塔罗牌，点选翻开并移至中央，再次点击后消散进入结算。
+ * 通关结算前抽卡特效：左右两张塔罗牌，点选翻开并移至中央，再次点击后消散。
+ * 池为未获得牌按数字前缀的前两张；仅剩一张时左右翻开同一张；无可抽牌则立即空结果。
  * 返回关闭函数。
  */
 export function openTarotDrawOverlay(
     gameRoot: Node,
     host: Component,
-    onFinished: () => void,
+    onFinished: (result: TarotDrawResult) => void,
     opts: TarotDrawOverlayOptions | null = null,
 ): () => void {
     const prev = gameRoot.getChildByName('TarotDrawRoot');
@@ -171,8 +183,7 @@ export function openTarotDrawOverlay(
     rootWg.top = rootWg.bottom = rootWg.left = rootWg.right = 0;
     rootWg.alignMode = Widget.AlignMode.ON_WINDOW_RESIZE;
     rootWg.updateAlignment();
-    const rootOp = root.addComponent(UIOpacity);
-    rootOp.opacity = 255;
+    root.addComponent(UIOpacity).opacity = 255;
 
     const dim = new Node('Dim');
     dim.setParent(root);
@@ -190,12 +201,14 @@ export function openTarotDrawOverlay(
     const hintY = cardH * 0.5 + 56;
     const hint = mkHintLabel(root, hintY, w);
     const hintLab = hint.getComponent(Label)!;
+    const hintOpInit = hint.getComponent(UIOpacity) ?? hint.addComponent(UIOpacity);
+    hintOpInit.opacity = 0;
 
     let closed = false;
     /** select → flipping → revealed → dismissing */
     let phase: 'select' | 'flipping' | 'revealed' | 'dismissing' = 'select';
-    let faceSf: SpriteFrame | null = null;
     let flipSfx: AudioClip | null = null;
+    let chosen: TarotCardDef | null = null;
     const cards: CardRefs[] = [];
 
     const closeAll = () => {
@@ -211,6 +224,12 @@ export function openTarotDrawOverlay(
             if (op) Tween.stopAllByTarget(op);
             root.destroy();
         }
+    };
+
+    const finishEmpty = () => {
+        if (closed) return;
+        closeAll();
+        onFinished({ cubeId: '', taloFacePath: '' });
     };
 
     const playFlipSfx = () => {
@@ -244,12 +263,17 @@ export function openTarotDrawOverlay(
             tween(hop).to(0.2, { opacity: 0 }, { easing: easing.sineOut }).start();
         }
         const op = root.getComponent(UIOpacity) ?? root.addComponent(UIOpacity);
+        const facePath = chosen?.taloFacePath ?? '';
+        const cubeId = chosen?.cubeId || tarotFacePathToCubeId(facePath);
         tween(op)
             .to(DISMISS_FADE, { opacity: 0 }, { easing: easing.sineIn })
             .call(() => {
                 if (closed) return;
                 closeAll();
-                onFinished();
+                onFinished({
+                    cubeId,
+                    taloFacePath: facePath,
+                });
             })
             .start();
     };
@@ -283,8 +307,9 @@ export function openTarotDrawOverlay(
         }
         if (phase !== 'select') return;
         const card = cards[index];
-        if (!card?.root.isValid) return;
+        if (!card?.root.isValid || !card.def) return;
         phase = 'flipping';
+        chosen = card.def;
         playFlipSfx();
 
         for (let i = 0; i < cards.length; i++) {
@@ -308,7 +333,6 @@ export function openTarotDrawOverlay(
         Tween.stopAllByTarget(card.root);
         card.face.setScale(1, 1, 1);
 
-        // 翻开同时缓慢移至画面正中央，并略放大
         tween(card.root)
             .to(
                 MOVE_CENTER_DUR,
@@ -319,7 +343,7 @@ export function openTarotDrawOverlay(
 
         tween(card.face)
             .to(FLIP_HALF, { scale: new Vec3(0.02, 1.04, 1) }, { easing: easing.sineIn })
-            .call(() => applyFace(card, faceSf))
+            .call(() => applyFace(card, card.faceSf))
             .to(FLIP_HALF, { scale: new Vec3(1, 1, 1) }, { easing: easing.sineOut })
             .call(() => enterRevealedPhase(card))
             .start();
@@ -354,21 +378,19 @@ export function openTarotDrawOverlay(
         btn.interactable = false;
         cardRoot.on(Button.EventType.CLICK, () => flipCard(index), host);
 
-        return { root: cardRoot, face, sprite: sp, button: btn };
+        return { root: cardRoot, face, sprite: sp, button: btn, def: null, faceSf: null };
     };
 
     const leftX = -(gap + cardW) / 2;
     const rightX = (gap + cardW) / 2;
     cards.push(mkCard(leftX, 0), mkCard(rightX, 1));
 
-    void Promise.all([
-        loadResourcesSpriteFrame(TALO_BACK),
-        loadResourcesSpriteFrame(TALO_FACE),
-        loadTarotFlipSfx(opts?.flipSfx ?? null),
-    ]).then(([back, face, sfx]) => {
+    const startRevealUi = (back: SpriteFrame | null) => {
         if (closed || !root.isValid) return;
-        faceSf = face;
-        flipSfx = sfx;
+        if (hint.isValid) {
+            const hop = hint.getComponent(UIOpacity) ?? hint.addComponent(UIOpacity);
+            hop.opacity = 255;
+        }
         for (const c of cards) {
             if (!c.root.isValid) continue;
             if (back) {
@@ -392,6 +414,39 @@ export function openTarotDrawOverlay(
                     if (c.button.isValid && phase === 'select') c.button.interactable = true;
                 })
                 .start();
+        });
+    };
+
+    loadTarotDrawPool((pool) => {
+        if (closed || !root.isValid) return;
+        if (pool.length < 2) {
+            finishEmpty();
+            return;
+        }
+        cards[0].def = pool[0];
+        cards[1].def = pool[1];
+
+        const facePaths = [pool[0].taloFacePath, pool[1].taloFacePath];
+        // 同一张牌时只加载一次正面
+        const uniquePaths = facePaths[0] === facePaths[1] ? [facePaths[0]] : facePaths;
+
+        void Promise.all([
+            loadResourcesSpriteFrame(TALO_BACK),
+            ...uniquePaths.map((p) => loadResourcesSpriteFrame(p)),
+            loadTarotFlipSfx(opts?.flipSfx ?? null),
+        ]).then((results) => {
+            if (closed || !root.isValid) return;
+            const back = results[0] as SpriteFrame | null;
+            flipSfx = results[results.length - 1] as AudioClip | null;
+            if (uniquePaths.length === 1) {
+                const face = results[1] as SpriteFrame | null;
+                cards[0].faceSf = face;
+                cards[1].faceSf = face;
+            } else {
+                cards[0].faceSf = results[1] as SpriteFrame | null;
+                cards[1].faceSf = results[2] as SpriteFrame | null;
+            }
+            startRevealUi(back);
         });
     });
 

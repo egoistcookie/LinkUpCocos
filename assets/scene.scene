@@ -577,7 +577,7 @@
     "hiddenTileSprite": null,
     "sfxHiddenFlip": null,
     "testMode": true,
-    "testLevel": 1,
+    "testLevel": 0,
     "shopLandAnimalSprites": [
       {
         "__uuid__": "11f9f785-c99c-4c0a-b081-d7a3227069fd@f9941",

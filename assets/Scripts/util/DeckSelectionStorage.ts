@@ -1,12 +1,13 @@
 import { SpriteFrame, sys } from 'cc';
 import { MAX_DECK_TYPE_COUNT, MIN_DECK_TYPE_COUNT, TILE_SPRITE_SLOTS } from './DeckConstants';
-import { loadPurchasedShopKeys } from './PlayerResourceStorage';
+import { loadEpicCubeIds, loadPurchasedShopKeys } from './PlayerResourceStorage';
 import type { ShopCatalogGroup } from './ShopCatalog';
 import {
     buildTileFacesFromDeckKeys,
     deckShopKeysToTypeIds,
     getDefaultOwnedEntries,
     getDefaultOwnedShopKeys,
+    makeEpicShopKey,
 } from './ShopCatalog';
 import { ensureDefaultShopOwnership } from './PlayerResourceStorage';
 
@@ -105,11 +106,30 @@ export function ensureDefaultDeckSelection(
 type DeckKeysCacheHost = { __linkupDeckShopKeys?: string[] | null };
 const _deckKeysHost = globalThis as unknown as DeckKeysCacheHost;
 
+/** 读取未过滤的原始卡组 key（优先 localStorage，避免缓存被其它路径过滤污染） */
+function readRawDeckShopKeys(): unknown {
+    let fromStorage: unknown = null;
+    try {
+        const s = sys.localStorage.getItem(DECK_SHOP_KEYS) as unknown;
+        if (s == null || s === '') fromStorage = null;
+        else if (typeof s !== 'string') fromStorage = s;
+        else fromStorage = JSON.parse(s);
+    } catch {
+        fromStorage = null;
+    }
+    if (Array.isArray(fromStorage)) {
+        // 以磁盘为准回填缓存，修复曾被过滤写回的内存缓存
+        _deckKeysHost.__linkupDeckShopKeys = fromStorage.map((x) => String(x ?? ''));
+        return fromStorage;
+    }
+    return _deckKeysHost.__linkupDeckShopKeys;
+}
+
 export function loadDeckShopKeysRaw(
     groups: ShopCatalogGroup[],
     extraOwnedKeys?: string[] | null,
 ): string[] {
-    // 允许：已购 + 传入额外 + 默认赠送（避免开始游戏时把默认卡组 key 滤空）
+    // 允许：已购 + 传入额外 + 默认赠送 + 已拥有史诗（避免开始游戏时把默认卡组 key 滤空）
     const allowed: Record<string, number> = Object.create(null);
     const mark = (k: string) => {
         if (k) allowed[k] = 1;
@@ -121,18 +141,10 @@ export function loadDeckShopKeysRaw(
     }
     const gifts = getDefaultOwnedShopKeys(groups);
     for (let i = 0; i < gifts.length; i++) mark(String(gifts[i]));
+    const epicIds = loadEpicCubeIds();
+    for (let i = 0; i < epicIds.length; i++) mark(makeEpicShopKey(epicIds[i]));
 
-    let raw: unknown = _deckKeysHost.__linkupDeckShopKeys;
-    if (raw == null) {
-        try {
-            const s = sys.localStorage.getItem(DECK_SHOP_KEYS) as unknown;
-            if (s == null || s === '') raw = null;
-            else if (typeof s !== 'string') raw = s;
-            else raw = JSON.parse(s);
-        } catch {
-            raw = null;
-        }
-    }
+    const raw = readRawDeckShopKeys();
     if (Array.isArray(raw)) {
         const keys: string[] = [];
         const seen: Record<string, number> = Object.create(null);
@@ -142,15 +154,15 @@ export function loadDeckShopKeysRaw(
             seen[k] = 1;
             keys.push(k);
         }
-        // 仅在过滤后仍有效时回写缓存，避免用空列表冲掉默认 30 种
-        if (keys.length > 0) _deckKeysHost.__linkupDeckShopKeys = keys;
+        // 注意：不要把「按当前 allowed 过滤后的子集」写回缓存/磁盘，
+        // 否则未传入史诗 key 的调用方会把已保存的 epic:* 冲掉。
         return keys;
     }
     return [];
 }
 
 export function saveDeckShopKeys(keys: string[]): void {
-    const uniq = [...new Set(keys.map((k) => String(k)))];
+    const uniq = [...new Set(keys.map((k) => String(k)).filter(Boolean))];
     _deckKeysHost.__linkupDeckShopKeys = uniq;
     try {
         sys.localStorage.setItem(DECK_SHOP_KEYS, JSON.stringify(uniq));
