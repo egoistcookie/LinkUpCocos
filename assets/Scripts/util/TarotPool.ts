@@ -136,3 +136,26 @@ export function loadTarotDrawPool(done: (pool: TarotCardDef[]) => void): void {
         done(buildTarotDrawPool(cards));
     });
 }
+
+/** 按史诗方块名查找对应塔罗定义（如「小瓦」→ 1-小瓦） */
+export function findTarotCardByCubeId(
+    cards: TarotCardDef[],
+    cubeId: string,
+): TarotCardDef | null {
+    const id = String(cubeId ?? '').trim();
+    if (!id) return null;
+    for (let i = 0; i < cards.length; i++) {
+        if (cards[i].cubeId === id) return cards[i];
+    }
+    return null;
+}
+
+/** 异步枚举 talo 后按方块名取对应塔罗 */
+export function loadTarotCardByCubeId(
+    cubeId: string,
+    done: (card: TarotCardDef | null) => void,
+): void {
+    listNumberedTarotCards((cards) => {
+        done(findTarotCardByCubeId(cards, cubeId));
+    });
+}

@@ -178,11 +178,14 @@ export class LinkUpBoard extends Component {
 
     /** 本关累计成功连线次数（通关时用于金币奖励） */
     private _levelConnectCount = 0;
+    /** 本关累计连线距离（格：|Δx|+|Δy|；结算页展示） */
+    private _levelConnectDistance = 0;
     /** 当前关卡（由 GameView 在 buildLevel 前注入） */
     private _level = 1;
     private _gravityAnimGen = 0;
 
-    onWin: ((connectCount: number) => void) | null = null;
+    /** 通关：connectCount 发金币，connectDistance 结算展示 */
+    onWin: ((connectCount: number, connectDistance: number) => void) | null = null;
     /** 成功连线并消除一对时，由 GameView 注入以播放音效 */
     onConnectSfx: (() => void) | null = null;
     /** 选中方块时，由 GameView 注入以播放音效 */
@@ -340,6 +343,7 @@ export class LinkUpBoard extends Component {
 
     buildLevel() {
         this._levelConnectCount = 0;
+        this._levelConnectDistance = 0;
         this._clearBoard();
         this._ensureLayout();
         if (hasHiddenTilesForLevel(this._level)) {
@@ -353,8 +357,14 @@ export class LinkUpBoard extends Component {
         return this._levelConnectCount;
     }
 
+    getLevelConnectDistance(): number {
+        return this._levelConnectDistance;
+    }
+
+    /** 清零本关连线次数与距离（结算后调用） */
     resetLevelConnectCount(): void {
         this._levelConnectCount = 0;
+        this._levelConnectDistance = 0;
     }
 
     isDealing(): boolean {
@@ -1250,6 +1260,8 @@ export class LinkUpBoard extends Component {
         }
         if (LinkUpPathFinder.canConnect(this.grid, r0, c0, r, c)) {
             this._levelConnectCount++;
+            // 连线距离 = 两格横纵坐标差之和（曼哈顿距离，单位：格）
+            this._levelConnectDistance += Math.abs(c0 - c) + Math.abs(r0 - r);
             this.onConnectSfx?.();
             this._drawConnectLine(r0, c0, r, c);
             this.grid[r0][c0] = null;
@@ -1531,7 +1543,7 @@ export class LinkUpBoard extends Component {
 
     private _afterChangeCore() {
         if (this._isEmpty()) {
-            this.onWin?.(this._levelConnectCount);
+            this.onWin?.(this._levelConnectCount, this._levelConnectDistance);
             return;
         }
         if (!this.hasAnyConnectablePair()) {

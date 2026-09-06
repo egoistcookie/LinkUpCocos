@@ -284,7 +284,7 @@ export class GameApp extends Component {
         this._home?.setConfiguredBackground(this.homeBackground);
         if (this._game) {
             this._game.onBack = () => this._onGameBack();
-            this._game.onLevelWin = (count) => this._onLevelWin(count);
+            this._game.onLevelWin = (count, distance) => this._onLevelWin(count, distance);
             const toolBtns: GameToolButtonSprites = {
                 backNormal: this.toolBtnBackNormal,
                 backPressed: this.toolBtnBackPressed,
@@ -608,8 +608,8 @@ export class GameApp extends Component {
         return loadCurrentLevel();
     }
 
-    /** 关卡通关：发放金币并打开结算页 */
-    private _onLevelWin(connectCount: number) {
+    /** 关卡通关：发放金币（按连线次数）并打开结算页（展示连线距离） */
+    private _onLevelWin(connectCount: number, connectDistance: number) {
         const level = this._game?.getLevel() ?? 1;
         const nextLevel = level + 1;
         trackLevelEnd('win', {
@@ -630,6 +630,7 @@ export class GameApp extends Component {
             connectCount,
             () => this._enterHome(),
             () => this._game?.beginOrRestartLevel(nextLevel),
+            connectDistance,
         );
     }
 
@@ -801,7 +802,7 @@ export class GameApp extends Component {
         if (this._home) this._home.node.active = false;
         if (this._game) {
             this._game.onBack = () => this._onGameBack();
-            this._game.onLevelWin = (count) => this._onLevelWin(count);
+            this._game.onLevelWin = (count, distance) => this._onLevelWin(count, distance);
             this._syncGameModeFlags();
             this._applyLevelClearDialog();
             this._game.setHiddenTileSprite(this.hiddenTileSprite);

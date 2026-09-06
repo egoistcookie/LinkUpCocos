@@ -2,6 +2,7 @@ import {
     Button,
     Color,
     Component,
+    EventTouch,
     Graphics,
     Label,
     Mask,
@@ -30,7 +31,13 @@ import {
     saveDeckShopKeys,
     saveDeckTypeIds,
 } from '../util/DeckSelectionStorage';
-import { deckShopKeysToTypeIds, makeEpicShopKey, type ShopCatalogGroup } from '../util/ShopCatalog';
+import {
+    deckShopKeysToTypeIds,
+    isEpicShopKey,
+    makeEpicShopKey,
+    parseEpicCubeId,
+    type ShopCatalogGroup,
+} from '../util/ShopCatalog';
 import {
     type DialogActionButtonResult,
     type DialogActionButtonSprites,
@@ -45,6 +52,7 @@ import {
     refreshDialogPanelBackgroundSize,
 } from '../util/DialogPanelBg';
 import { trackDeckConfig } from '../util/AnalyticsTracker';
+import { openEpicTarotPreviewOverlay } from './EpicTarotPreviewOverlay';
 
 type DeckGridItem = { key: string | number; sf: SpriteFrame; selectable?: boolean };
 type DeckSection = { title: string; items: DeckGridItem[]; selectable?: boolean };
@@ -74,6 +82,10 @@ const DECK_CONTENT_TOP_PAD = 8;
 const PANEL_PAD_X = 24;
 const TITLE_AREA = 88;
 const FOOTER_AREA = 132;
+/** 史诗方块长按预览塔罗的触发时长（秒） */
+const EPIC_LONG_PRESS_SEC = 0.45;
+/** 长按过程中位移超过此值则取消（像素） */
+const EPIC_LONG_PRESS_MOVE_CANCEL = 14;
 
 function addCenterFillRect(node: Node, w: number, h: number, fill: Color) {
     const g = node.addComponent(Graphics);
@@ -130,8 +142,11 @@ export class DeckSelectDialog extends Component {
     private _countLabel: Label | null = null;
     private _okBtn: DialogActionButtonResult | null = null;
     private readonly _rowReveal = new RowRevealRunner(this);
+    private _epicPreviewCloser: (() => void) | null = null;
 
     onDestroy() {
+        this._epicPreviewCloser?.();
+        this._epicPreviewCloser = null;
         this._rowReveal.stop();
     }
 
@@ -625,26 +640,108 @@ export class DeckSelectDialog extends Component {
 
         if (!selectable) return;
 
-        cellRoot.addComponent(Button);
-        cellRoot.on(Button.EventType.CLICK, () => {
-            if (shopOn) {
-                const k = String(item.key);
-                if (this._selectedShopKeys.has(k)) this._selectedShopKeys.delete(k);
-                else {
-                    if (this._selectedShopKeys.size >= MAX_DECK_TYPE_COUNT) return;
-                    this._selectedShopKeys.add(k);
-                }
-            } else {
-                const id = Number(item.key);
-                if (this._selectedIds.has(id)) this._selectedIds.delete(id);
-                else {
-                    if (this._selectedIds.size >= MAX_DECK_TYPE_COUNT) return;
-                    this._selectedIds.add(id);
-                }
+        const isEpic = isEpicShopKey(String(item.key));
+        let suppressClick = false;
+        let longPressArmed = false;
+        let pressStartX = 0;
+        let pressStartY = 0;
+        let longPressCb: (() => void) | null = null;
+
+        const clearLongPress = () => {
+            longPressArmed = false;
+            if (longPressCb) {
+                this.unschedule(longPressCb);
+                longPressCb = null;
             }
-            drawSel(isSelected());
-            this._refreshFooter();
-        }, this);
+        };
+
+        if (isEpic) {
+            cellRoot.on(
+                Node.EventType.TOUCH_START,
+                (e: EventTouch) => {
+                    suppressClick = false;
+                    longPressArmed = true;
+                    const loc = e.getUILocation();
+                    pressStartX = loc.x;
+                    pressStartY = loc.y;
+                    clearLongPress();
+                    longPressArmed = true;
+                    longPressCb = () => {
+                        longPressCb = null;
+                        if (!longPressArmed || !cellRoot.isValid) return;
+                        longPressArmed = false;
+                        suppressClick = true;
+                        this._openEpicTarotFromCell(cellRoot, parseEpicCubeId(String(item.key)));
+                    };
+                    this.scheduleOnce(longPressCb, EPIC_LONG_PRESS_SEC);
+                },
+                this,
+            );
+            cellRoot.on(
+                Node.EventType.TOUCH_MOVE,
+                (e: EventTouch) => {
+                    if (!longPressArmed) return;
+                    const loc = e.getUILocation();
+                    const dx = loc.x - pressStartX;
+                    const dy = loc.y - pressStartY;
+                    if (dx * dx + dy * dy > EPIC_LONG_PRESS_MOVE_CANCEL * EPIC_LONG_PRESS_MOVE_CANCEL) {
+                        clearLongPress();
+                    }
+                },
+                this,
+            );
+            cellRoot.on(Node.EventType.TOUCH_END, clearLongPress, this);
+            cellRoot.on(Node.EventType.TOUCH_CANCEL, clearLongPress, this);
+        }
+
+        cellRoot.addComponent(Button);
+        cellRoot.on(
+            Button.EventType.CLICK,
+            () => {
+                if (suppressClick) {
+                    suppressClick = false;
+                    return;
+                }
+                if (shopOn) {
+                    const k = String(item.key);
+                    if (this._selectedShopKeys.has(k)) this._selectedShopKeys.delete(k);
+                    else {
+                        if (this._selectedShopKeys.size >= MAX_DECK_TYPE_COUNT) return;
+                        this._selectedShopKeys.add(k);
+                    }
+                } else {
+                    const id = Number(item.key);
+                    if (this._selectedIds.has(id)) this._selectedIds.delete(id);
+                    else {
+                        if (this._selectedIds.size >= MAX_DECK_TYPE_COUNT) return;
+                        this._selectedIds.add(id);
+                    }
+                }
+                drawSel(isSelected());
+                this._refreshFooter();
+            },
+            this,
+        );
+    }
+
+    private _openEpicTarotFromCell(cellRoot: Node, cubeId: string) {
+        const id = String(cubeId ?? '').trim();
+        if (!id || !this.node?.isValid || !cellRoot.isValid) return;
+
+        this._epicPreviewCloser?.();
+        this._epicPreviewCloser = null;
+
+        const cellUt = cellRoot.getComponent(UITransform);
+        const rootUt = this.node.getComponent(UITransform);
+        if (!cellUt || !rootUt) return;
+
+        const world = cellUt.convertToWorldSpaceAR(new Vec3(0, 0, 0));
+        const local = rootUt.convertToNodeSpaceAR(world);
+
+        this._epicPreviewCloser = openEpicTarotPreviewOverlay(this.node, this, id, {
+            startLocalPos: local,
+            startFaceSize: CELL_FACE,
+        });
     }
 
     private _refreshFooter() {

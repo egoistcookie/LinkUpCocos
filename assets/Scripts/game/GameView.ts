@@ -173,8 +173,8 @@ export class GameView extends Component {
     private _hiddenTileSpriteCache: SpriteFrame | null = null;
 
     onBack: (() => void) | null = null;
-    /** 关卡通关：参数为本关连线次数（由 GameApp 结算并弹窗） */
-    onLevelWin: ((connectCount: number) => void) | null = null;
+    /** 关卡通关：连线次数（金币）+ 连线距离（展示）；由 GameApp 结算并弹窗 */
+    onLevelWin: ((connectCount: number, connectDistance: number) => void) | null = null;
 
     /** GameRoot 初始常为 inactive：start 在首次激活后调用，晚于同帧已执行过的 GameApp.start，可读到 App 上配置的按钮贴图 */
     start() {
@@ -185,12 +185,12 @@ export class GameView extends Component {
         return this._level;
     }
 
-    /** 本关尚未结算的连线次数（用于退出游戏时静默结算） */
+    /** 本关尚未结算的连线次数（用于退出游戏时静默结算金币） */
     getPendingConnectCoins(): number {
         return this._board?.getLevelConnectCount() ?? 0;
     }
 
-    /** 取出并清零本关连线计数，避免重复结算 */
+    /** 取出并清零本关连线次数与距离，避免重复结算 */
     takePendingConnectCoins(): number {
         const c = this._board?.getLevelConnectCount() ?? 0;
         this._board?.resetLevelConnectCount();
@@ -369,6 +369,7 @@ export class GameView extends Component {
         coinAmount: number,
         onHome: () => void,
         onNext: () => void,
+        connectDistance = coinAmount,
     ) {
         this.closeLevelClearOverlay();
         const openSettle = () => {
@@ -377,7 +378,7 @@ export class GameView extends Component {
             this._levelClearCloser = openLevelClearOverlay(
                 this.node,
                 this._levelClearCfg,
-                { level, coinAmount, onHome, onNext },
+                { level, coinAmount, connectDistance, onHome, onNext },
                 this,
             );
         };
@@ -559,9 +560,9 @@ export class GameView extends Component {
         bUt.setContentSize(lay.w, lay.h);
 
         this._board = boardNode.addComponent(LinkUpBoard);
-        this._board.onWin = (connectCount) => {
+        this._board.onWin = (connectCount, connectDistance) => {
             this._board?.resetLevelConnectCount();
-            this.onLevelWin?.(connectCount);
+            this.onLevelWin?.(connectCount, connectDistance);
         };
         this._board.setHiddenTileSprite(this._hiddenTileSpriteCache);
         // 贴图与卡组必须一起上，且用当前 cache（await 之后可能已被 GameApp 更新为 30 种）

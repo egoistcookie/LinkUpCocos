@@ -23,15 +23,15 @@ const C_DIM = new Color(0, 0, 0, 160);
 const C_TITLE = new Color(0xe9, 0xc4, 0x6a, 255);
 const C_BTN_HOME = new Color(0x41, 0x5a, 0x77, 255);
 const C_BTN_NEXT = new Color(0x2d, 0x6a, 0x4f, 255);
-/** 「本关连线」「次」暖棕色（略提亮） */
+/** 「连线距离」「格」暖棕色（略提亮） */
 const C_ROUND_TEXT = new Color(0x98, 0x75, 0x48, 255);
-/** 连线次数数字：灰绿色（略提亮） */
+/** 连线距离数字：灰绿色（略提亮） */
 const C_ROUND_NUM = new Color(0x82, 0xa8, 0x82, 255);
 const C_ROUND_OUTLINE = new Color(0x6a, 0x52, 0x38, 255);
 const ROUND_FONT_FAMILY = 'YouYuan, Yuanti SC, STYuanti-SC-Regular, PingFang SC, sans-serif';
 const ROUND_FONT_SIZE = 26;
 const ROUND_NUM_FONT_SIZE = 30;
-/** 「本关连线」四字之间的额外字距 */
+/** 「连线距离」四字之间的额外字距 */
 const ROUND_CHAR_GAP = 6;
 
 export type LevelClearButtonSprites = {
@@ -52,6 +52,8 @@ export type LevelClearDialogConfig = {
 export type LevelClearOpenOptions = {
     level: number;
     coinAmount: number;
+    /** 本关连线距离（格），结算文案展示；默认与 coinAmount 相同以兼容旧调用 */
+    connectDistance?: number;
     onHome: () => void;
     onNext: () => void;
 };
@@ -94,14 +96,14 @@ function mkRoundLabel(parent: Node, text: string, color: Color, fontSize: number
     return n;
 }
 
-/** 「本关连线」+ 数字 +「次」，圆体、棕/绿分色 */
-function mkConnectCountRow(parent: Node, x: number, y: number, count: number) {
-    const row = new Node('ConnectCount');
+/** 「连线距离」+ 数字 +「格」，圆体、棕/绿分色 */
+function mkConnectCountRow(parent: Node, x: number, y: number, distance: number) {
+    const row = new Node('ConnectDistance');
     row.setParent(parent);
     row.setPosition(x, y, 0);
 
-    const chars = ['本', '关', '连', '线'];
-    const num = `${count}`;
+    const chars = ['连', '线', '距', '离'];
+    const num = `${distance}`;
     const charW = ROUND_FONT_SIZE * 0.92;
     const numW = num.length * ROUND_NUM_FONT_SIZE * 0.62;
     const sufW = ROUND_FONT_SIZE * 0.92;
@@ -127,7 +129,7 @@ function mkConnectCountRow(parent: Node, x: number, y: number, count: number) {
     numN.setPosition(cx + numW / 2, 0, 0);
     cx += numW + midGap;
 
-    const sufN = mkRoundLabel(row, '次', C_ROUND_TEXT, ROUND_FONT_SIZE);
+    const sufN = mkRoundLabel(row, '格', C_ROUND_TEXT, ROUND_FONT_SIZE);
     sufN.setPosition(cx + sufW / 2 + 2, 0, 0);
 }
 
@@ -318,7 +320,7 @@ export function openLevelClearOverlay(
         al.outlineWidth = 2;
     }
 
-    mkConnectCountRow(panel, 50, -panelH * 0.16 + 68, opts.coinAmount);
+    mkConnectCountRow(panel, 50, -panelH * 0.16 + 68, opts.connectDistance ?? opts.coinAmount);
 
     const btnY = -panelH * 0.34;
     const buttons = cfg?.buttons ?? null;
